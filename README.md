@@ -361,13 +361,17 @@ args[2] coeff
 
 | operation | 行为 |
 |---|---|
+| `add` | 左值加右值；`-999` 按 `0` 处理 |
 | `minus` | 左值减右值；`-999` 按 `0` 处理 |
+| `multiply` | 左值乘右值；`-999` 按 `0` 处理 |
 | `match` | 两边都为空输出 `2`，相同输出 `1`，否则输出 `0` |
 | `div` | 左值除右值；任一值接近 `0` 时输出 `0` |
 | `cos` | 两个逗号分隔向量的余弦相似度 |
 
 ```ini
 name=price_diff;class=Arithmetic;slot_id=60;depend=price_a,price_b;args=minus,3,1
+name=price_sum;class=Arithmetic;slot_id=63;depend=price_a,price_b;args=add,3,1
+name=price_product;class=Arithmetic;slot_id=64;depend=price_a,price_b;args=multiply,3,1
 ```
 
 ### Scale

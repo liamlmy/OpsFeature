@@ -10,7 +10,7 @@ import (
 
 // Arithmetic 对应 class=Arithmetic：从两个依赖列算出一个派生数值。
 //
-// args[0] operation — minus / match / div / cos
+// args[0] operation — add / minus / multiply / match / div / cos
 // args[1] hash_version
 // args[2] coeff
 type Arithmetic struct {
@@ -22,17 +22,21 @@ type Arithmetic struct {
 type arithmeticOp uint8
 
 const (
-	aoMinus arithmeticOp = iota // x - y
-	aoMatch                     // 一致性：都空=2，相等=1，不等=0
-	aoDiv                       // x / y
-	aoCos                       // 两个向量的余弦相似度
+	aoAdd      arithmeticOp = iota // x + y
+	aoMinus                        // x - y
+	aoMultiply                     // x * y
+	aoMatch                        // 一致性：都空=2，相等=1，不等=0
+	aoDiv                          // x / y
+	aoCos                          // 两个向量的余弦相似度
 )
 
 var arithmeticOps = map[string]arithmeticOp{
-	"minus": aoMinus,
-	"match": aoMatch,
-	"div":   aoDiv,
-	"cos":   aoCos,
+	"add":      aoAdd,
+	"minus":    aoMinus,
+	"multiply": aoMultiply,
+	"match":    aoMatch,
+	"div":      aoDiv,
+	"cos":      aoCos,
 }
 
 func (a *Arithmetic) Init() error {
@@ -61,10 +65,20 @@ func (a *Arithmetic) Emit(in *feature.Input, st *feature.State, out *[]feature.F
 	var val float64
 	switch a.op {
 
+	case aoAdd:
+		x := zeroIfMissing(a.DependFloat64(left, in, st))
+		y := zeroIfMissing(a.DependFloat64(right, in, st))
+		val = x + y
+
 	case aoMinus:
 		x := zeroIfMissing(a.DependFloat64(left, in, st))
 		y := zeroIfMissing(a.DependFloat64(right, in, st))
 		val = x - y
+
+	case aoMultiply:
+		x := zeroIfMissing(a.DependFloat64(left, in, st))
+		y := zeroIfMissing(a.DependFloat64(right, in, st))
+		val = x * y
 
 	case aoMatch:
 		x := a.DependString(left, in, st)
