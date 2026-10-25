@@ -48,6 +48,9 @@ func InitParser(parseConfPath string) (*Parser, error) {
 	parser.requiredInput = buildRequiredInput(featureNames)
 	if value := conf["debug"]; value != "" {
 		parser.IsDebug, err = strconv.Atoi(value)
+		if err == nil && parser.IsDebug != 0 && parser.IsDebug != 1 {
+			return nil, fmt.Errorf("debug must be 0 or 1")
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -68,10 +71,21 @@ func InitParser(parseConfPath string) (*Parser, error) {
 		}
 	}
 	if parser.Label != "" {
-		parser.LabelList = strings.Split(parser.Label, ",")
+		parser.LabelList, err = parseColumnList(parser.Label, "label")
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range parser.LabelList {
+			if !inputNames[name] {
+				return nil, fmt.Errorf("label field %q not found in fea_cols", name)
+			}
+		}
 	}
 	parser.OpExtractor, err = initOpExtractor(featureListPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := parser.OpExtractor.ValidateInputs(parser.FeatureNameList); err != nil {
 		return nil, err
 	}
 	return parser, nil
@@ -109,6 +123,7 @@ func loadParseConfig(parseConfPath string) (map[string]string, error) {
 	defer file.Close()
 
 	parseConfMap := make(map[string]string)
+	allowed := map[string]bool{"feature_list": true, "fea_cols": true, "label": true, "add_token": true, "debug": true, "filter": true}
 	s := bufio.NewScanner(file)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -125,6 +140,12 @@ func loadParseConfig(parseConfPath string) (map[string]string, error) {
 		if key == "" {
 			return nil, fmt.Errorf("parse config key is empty: %s", line)
 		}
+		if !allowed[key] {
+			return nil, fmt.Errorf("unknown parse config key %q", key)
+		}
+		if _, exists := parseConfMap[key]; exists {
+			return nil, fmt.Errorf("duplicate parse config key %q", key)
+		}
 		if strings.HasPrefix(value, "\"") {
 			unquoted, err := strconv.Unquote(value)
 			if err != nil {
@@ -137,13 +158,46 @@ func loadParseConfig(parseConfPath string) (map[string]string, error) {
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
-	for key, value := range parseConfMap {
-		parseConfMap[key] = os.Expand(value, func(name string) string {
-			if val, ok := parseConfMap[name]; ok {
-				return val
+	// Expand from immutable originals; DFS detects cycles and missing names.
+	expanded := make(map[string]string, len(parseConfMap))
+	visiting := make(map[string]bool)
+	var expand func(string) (string, error)
+	expand = func(key string) (string, error) {
+		if value, ok := expanded[key]; ok {
+			return value, nil
+		}
+		if visiting[key] {
+			return "", fmt.Errorf("cyclic parse config reference at %q", key)
+		}
+		raw, ok := parseConfMap[key]
+		if !ok {
+			return "", fmt.Errorf("unknown parse config reference %q", key)
+		}
+		visiting[key] = true
+		var expandErr error
+		value := os.Expand(raw, func(name string) string {
+			v, err := expand(name)
+			if err != nil && expandErr == nil {
+				expandErr = err
 			}
-			return ""
+			return v
 		})
+		visiting[key] = false
+		if expandErr != nil {
+			return "", expandErr
+		}
+		expanded[key] = value
+		return value, nil
 	}
-	return parseConfMap, nil
+	keys := make([]string, 0, len(parseConfMap))
+	for key := range parseConfMap {
+		keys = append(keys, key)
+	}
+	sortStrings(keys)
+	for _, key := range keys {
+		if _, err := expand(key); err != nil {
+			return nil, err
+		}
+	}
+	return expanded, nil
 }

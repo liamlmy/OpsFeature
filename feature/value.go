@@ -2,6 +2,7 @@ package feature
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 
 	"github.com/liamlmy/OpsFeature/utils"
@@ -26,6 +27,11 @@ type value struct {
 	u     uint64      // kindInt64(uint64 位模式) / kindUint64 / kindBool(0|1)
 	s     string      // kindString
 	iface interface{} // 仅 kindIface
+}
+
+// Value.Comparable also checks dynamic interface fields inside structs/arrays.
+func (v value) comparable() bool {
+	return v.k != kindIface || v.iface == nil || reflect.ValueOf(v.iface).Comparable()
 }
 
 func f64Value(v float64) value { return value{k: kindFloat64, f: v} }

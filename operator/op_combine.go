@@ -22,6 +22,9 @@ func newCombine(arity int) func() feature.Operator {
 }
 
 func (c *Combine) Init() error {
+	if err := c.RequireMaxArgs(3); err != nil {
+		return err
+	}
 	if err := c.ParseHashArgs(1, 2); err != nil {
 		return err
 	}

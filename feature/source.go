@@ -34,7 +34,10 @@ type Source interface {
 
 func (b *Base) source(kind sourceKind, depend string, in *Input, st *State) Source {
 	key := sourceKey{depend: depend, kind: kind}
-	if kind == srcSessionField {
+	// All arguments from index 4 onward affect sequence parsing, including
+	// padding length/default and field selection/type. Commas are unambiguous
+	// because args themselves are parsed as comma-separated fields.
+	if kind == srcSession || kind == srcVector || kind == srcSessionField {
 		key.variant = b.argsVariant
 	}
 	if s, ok := st.sources[key]; ok {
@@ -42,7 +45,14 @@ func (b *Base) source(kind sourceKind, depend string, in *Input, st *State) Sour
 	}
 
 	s := newSource(kind)
+	if s == nil {
+		st.fail(fmt.Errorf("feature %q: unsupported source kind %d", b.name, kind))
+		return nil
+	}
 	if err := s.parse(b, depend, in, st); err != nil {
+		if !errors.Is(err, errEmptyDepend) {
+			st.fail(fmt.Errorf("feature %q source %q: %w", b.name, depend, err))
+		}
 		if r, ok := s.(releasable); ok {
 			r.release()
 		}
@@ -149,7 +159,7 @@ func (s *sessionSource) parse(b *Base, depend string, in *Input, st *State) erro
 	if err != nil {
 		return err
 	}
-	s.data = utils.ParseArrayIntNew(raw, "_", padTo, padVal)
+	s.data = utils.ParseArrayIntNewInto(s.data, raw, "_", padTo, padVal)
 	return nil
 }
 
@@ -167,7 +177,7 @@ func (s *vectorSource) parse(b *Base, depend string, in *Input, st *State) error
 	if err != nil {
 		return err
 	}
-	s.data = utils.ParseArrayNew(raw, ",", padTo, padVal)
+	s.data = utils.ParseArrayNewInto(s.data, raw, ",", padTo, padVal)
 	return nil
 }
 

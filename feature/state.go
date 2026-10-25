@@ -9,6 +9,7 @@ type State struct {
 	fids    map[string]*fidCache
 	sources map[sourceKey]Source
 	dedup   dedupSet
+	err     error
 
 	keyBuf    []string
 	keyBufI64 []int64
@@ -35,32 +36,50 @@ func (s *State) ensure() {
 // maxKeptBuf 是跨样本保留的缓冲区容量上限。
 const maxKeptBuf = 4096
 
+// fail records the first failure without changing the public Emit API.
+func (s *State) fail(err error) {
+	if s.err == nil {
+		s.err = err
+	}
+}
+
 func (s *State) Reset() {
 	if s == nil {
 		return
 	}
-	for k := range s.inner {
-		delete(s.inner, k)
+	if len(s.inner) > maxKeptBuf {
+		s.inner = nil
+	} else {
+		clear(s.inner)
 	}
-	for k := range s.fids {
-		delete(s.fids, k)
+	if len(s.fids) > maxKeptBuf {
+		s.fids = nil
+	} else {
+		clear(s.fids)
 	}
-
 	for _, v := range s.sources {
 		if r, ok := v.(releasable); ok {
 			r.release()
 		}
 	}
-	for k := range s.sources {
-		delete(s.sources, k)
+	if len(s.sources) > maxKeptBuf {
+		s.sources = nil
+	} else {
+		clear(s.sources)
 	}
-
+	s.dedup.reset(0)
+	clear(s.keyBuf)
 	if cap(s.keyBuf) > maxKeptBuf {
 		s.keyBuf = nil
+	} else {
+		s.keyBuf = s.keyBuf[:0]
 	}
 	if cap(s.keyBufI64) > maxKeptBuf {
 		s.keyBufI64 = nil
+	} else {
+		s.keyBufI64 = s.keyBufI64[:0]
 	}
+	s.err = nil
 }
 
 func sortedStringKeys(m map[string]float64, s *State) []string {

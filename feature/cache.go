@@ -11,6 +11,9 @@ type fidCache struct {
 }
 
 func (c *fidCache) get(v value) (uint64, bool) {
+	if !v.comparable() {
+		return 0, false
+	}
 	switch v.k {
 	case kindFloat64:
 		fid, ok := c.byFloat[v.f]
@@ -34,6 +37,9 @@ func (c *fidCache) get(v value) (uint64, bool) {
 }
 
 func (c *fidCache) put(v value, fid uint64) {
+	if !v.comparable() {
+		return
+	}
 	switch v.k {
 	case kindFloat64:
 		if c.byFloat == nil {
@@ -129,6 +135,9 @@ func (d *dedupSet) reset(hint int) {
 }
 
 func (d *dedupSet) seen(v value) bool {
+	if !v.comparable() {
+		return false
+	}
 	switch v.k {
 	case kindFloat64:
 		if d.f == nil {

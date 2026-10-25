@@ -18,37 +18,23 @@ func Less(x, y float64) bool {
 	return diff < -delta
 }
 
+// BinarySearch returns the first threshold >= value (using LessEqual's
+// historical tolerance), or len(array) above all thresholds. Equal thresholds
+// retain their configured positions. An empty table returns -1.
 func BinarySearch(array []float64, value float64) int64 {
 	if len(array) == 0 {
 		return -1
 	}
-
-	if len(array) == 1 {
-		return 0
-	}
-
-	length := len(array)
-	var mid int
-	left := 0
-	right := length - 1
-
-	if LessEqual(value, array[left]) {
-		return int64(left)
-	}
-
-	if !LessEqual(value, array[right]) {
-		return int64(right + 1)
-	}
-
-	for left+1 < right {
-		mid = left + (right-left)/2
+	left, right := 0, len(array)
+	for left < right {
+		mid := left + (right-left)/2
 		if LessEqual(value, array[mid]) {
 			right = mid
 		} else {
-			left = mid
+			left = mid + 1
 		}
 	}
-	return int64(right)
+	return int64(left)
 }
 
 func Float2Int(val float64) int {

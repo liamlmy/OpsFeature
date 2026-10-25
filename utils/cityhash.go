@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"unsafe"
 )
 
 const (
@@ -37,9 +36,9 @@ func CityHash64String(x string) uint64 { return Hash64([]byte(x)) }
 func CityHash64Bytes(x []byte) uint64 { return Hash64(x) }
 
 func CityHash64Uint64(x uint64) uint64 {
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, x)
-	return Hash64(buf)
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], x)
+	return Hash64(buf[:])
 }
 
 // CityHash64Int 与 CityHash64Int64 共用 8 字节小端表示,和原 case int / case int64 一致
@@ -48,9 +47,9 @@ func CityHash64Int(x int) uint64 { return CityHash64Uint64(uint64(x)) }
 func CityHash64Int64(x int64) uint64 { return CityHash64Uint64(uint64(x)) }
 
 func CityHash64Uint32(x uint32) uint64 {
-	buf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(buf, x)
-	return Hash64(buf)
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], x)
+	return Hash64(buf[:])
 }
 
 func CityHash64Int32(x int32) uint64 { return CityHash64Uint32(uint32(x)) }
@@ -244,8 +243,8 @@ func hash128to64(lo, hi uint64) uint64 {
 	return b
 }
 
-func fetch64(b []byte) uint64 { return *(*uint64)(unsafe.Pointer(&b[0])) }
-func fetch32(b []byte) uint32 { return *(*uint32)(unsafe.Pointer(&b[0])) }
+func fetch64(b []byte) uint64 { return binary.LittleEndian.Uint64(b) }
+func fetch32(b []byte) uint32 { return binary.LittleEndian.Uint32(b) }
 
 func weakHashLen32WithSeeds(s []byte, a, b uint64) (uint64, uint64) {
 	w := fetch64(s)

@@ -3,6 +3,7 @@ package feature
 import (
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -48,6 +49,7 @@ type Base struct {
 	hashVersion int
 	coeff       float64
 	isSeq       bool
+	slots       fakeSlotRange
 
 	argsVariant string
 }
@@ -74,7 +76,7 @@ func (b *Base) load(conf map[string]string) error {
 		case "args":
 			b.args = splitTrim(v)
 			if len(b.args) > 4 {
-				b.argsVariant = strings.Join(b.args[4:], "_")
+				b.argsVariant = strings.Join(b.args[4:], ",")
 			}
 		case "addcol":
 			b.addcol, err = atobField(k, v)
@@ -105,6 +107,14 @@ func (b *Base) validate() error {
 	if b.slotID < 0 || b.slotID > maxSlotID {
 		return fmt.Errorf("operator: feature %q slot_id %d out of range [0, %d]",
 			b.name, b.slotID, maxSlotID)
+	}
+	for _, dep := range b.depends {
+		if dep == "" {
+			return fmt.Errorf("operator: feature %q has empty depend", b.name)
+		}
+	}
+	if math.IsNaN(b.coeff) || math.IsInf(b.coeff, 0) {
+		return fmt.Errorf("operator: feature %q coeff must be finite", b.name)
 	}
 	switch b.hashVersion {
 	case hashVersionCityHash, hashVersionRawValue, hashVersionSlotValue,
@@ -167,6 +177,9 @@ func (b *Base) argFloat(i int) (float64, error) {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return 0, fmt.Errorf("operator: feature %q args[%d] %q is not a float: %v", b.name, i, v, err)
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("operator: feature %q args[%d] must be finite", b.name, i)
 	}
 	return f, nil
 }
@@ -243,12 +256,13 @@ func (b *Base) initFakeSlots() (fakeSlotRange, error) {
 		return r, fmt.Errorf("operator: feature %q args[2] slot_start %d must be >= %d (fake slot range)",
 			b.name, r.start, minFakeSlot)
 	}
-	if r.end-r.start+1 != r.num {
+	if r.end < r.start || r.end-r.start != r.num-1 {
 		return r, fmt.Errorf("operator: feature %q fake slot range [%d,%d] holds %d slots but num is %d",
 			b.name, r.start, r.end, r.end-r.start+1, r.num)
 	}
 
 	b.isSeq = true
+	b.slots = r
 	return r, nil
 }
 

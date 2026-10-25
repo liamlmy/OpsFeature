@@ -20,14 +20,21 @@ type Seq struct {
 }
 
 func (s *Seq) Init() error {
+	if err := s.RequireMaxArgs(6); err != nil {
+		return err
+	}
 	if err := s.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
-	if err := s.RequireDepends(1); err != nil {
+	if err := s.RequireDependsExactly(1); err != nil {
 		return err
 	}
 	var err error
 	s.slots, err = s.InitFakeSlots()
+	if err != nil {
+		return err
+	}
+	_, err = s.ArgUint64(5)
 	return err
 }
 
@@ -56,6 +63,12 @@ type SeqField struct {
 }
 
 func (s *SeqField) Init() error {
+	if err := s.RequireMaxArgs(9); err != nil {
+		return err
+	}
+	if len(s.Depends()) > 2 {
+		return fmt.Errorf("operator: feature %q needs one or two depend columns", s.Name())
+	}
 	if err := s.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
@@ -64,6 +77,23 @@ func (s *SeqField) Init() error {
 	}
 	var err error
 	s.slots, err = s.InitFakeSlots()
+	if err != nil {
+		return err
+	}
+	element := s.ArgStr(6, "int")
+	if element != "int" && element != "str" {
+		return fmt.Errorf("operator: feature %q invalid field element type %q", s.Name(), element)
+	}
+	pad, err := s.ArgInt(7)
+	if err != nil {
+		return err
+	}
+	if pad != 0 && pad != 1 {
+		return fmt.Errorf("operator: feature %q padding flag must be 0 or 1", s.Name())
+	}
+	if element == "int" {
+		_, err = s.ArgUint64(8)
+	}
 	return err
 }
 
@@ -111,10 +141,13 @@ type SeqEmb struct {
 }
 
 func (s *SeqEmb) Init() error {
+	if err := s.RequireMaxArgs(7); err != nil {
+		return err
+	}
 	if err := s.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
-	if err := s.RequireDepends(1); err != nil {
+	if err := s.RequireDependsExactly(1); err != nil {
 		return err
 	}
 	var err error
@@ -131,7 +164,8 @@ func (s *SeqEmb) Init() error {
 			"otherwise fake slot would run past slot_end %d",
 			s.Name(), padTo, s.slots.Num(), s.slots.End())
 	}
-	return nil
+	_, err = s.ArgFloat(6)
+	return err
 }
 
 func (s *SeqEmb) Emit(in *feature.Input, st *feature.State, out *[]feature.Fid) error {

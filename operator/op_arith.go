@@ -40,10 +40,13 @@ var arithmeticOps = map[string]arithmeticOp{
 }
 
 func (a *Arithmetic) Init() error {
+	if err := a.RequireMaxArgs(3); err != nil {
+		return err
+	}
 	if err := a.ParseHashArgs(1, 2); err != nil {
 		return err
 	}
-	if err := a.RequireDepends(2); err != nil {
+	if err := a.RequireDependsExactly(2); err != nil {
 		return err
 	}
 

@@ -13,6 +13,8 @@ import (
 const (
 	initialInputBufferSize = 64 * 1024
 	maxInputLineSize       = 8 * 1024 * 1024
+	// Keep a typical 4096-position result plus slice growth headroom (128 KiB).
+	maxKeptOutputFIDs = 8192
 )
 
 func main() {
@@ -38,6 +40,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		state = feature.NewState()
 		fids  []feature.Fid
 	)
+	defer state.Reset()
+	extractionFailed := false
 	if parser.IsDebug == 1 {
 		fmt.Fprintln(stderr, "debug is not supported, fall back to normal output")
 	}
@@ -60,19 +64,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			input.Score[name] = value
 		}
 		state.Reset()
+		if cap(fids) > maxKeptOutputFIDs {
+			fids = nil
+		}
 		fids, err = parser.OpExtractor.Extract(input, state, fids[:0])
 		if err != nil {
-			fmt.Fprintf(stderr, "operator Extract error: %v\n", err)
+			fmt.Fprintf(stderr, "skip sample: operator Extract error: %v\n", err)
+			extractionFailed = true
+			continue
 		}
 		output, err := feature.OutputPerLineOp(fields, parser.LabelList, parser.AddTokenList, fids)
 		if err != nil {
 			fmt.Fprintf(stderr, "OutputPerLineOp error: %v\n", err)
 			continue
 		}
-		fmt.Fprintln(stdout, output)
+		if _, err := fmt.Fprintln(stdout, output); err != nil {
+			fmt.Fprintf(stderr, "write stdout error: %v\n", err)
+			return 1
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(stderr, "read stdin error: %v\n", err)
+		return 1
+	}
+	if extractionFailed {
 		return 1
 	}
 	return 0

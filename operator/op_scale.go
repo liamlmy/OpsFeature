@@ -25,10 +25,13 @@ var scaleModes = map[string]scaleMode{
 }
 
 func (s *Scale) Init() error {
+	if err := s.RequireMaxArgs(3); err != nil {
+		return err
+	}
 	if err := s.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
-	if err := s.RequireDepends(1); err != nil {
+	if err := s.RequireDependsExactly(1); err != nil {
 		return err
 	}
 	name := s.ArgStr(2, "log") // 缺省 log，与原实现一致

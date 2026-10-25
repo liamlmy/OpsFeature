@@ -33,6 +33,8 @@ func getKVIntFloat() *kvIntFloatSource {
 func (s *kvIntFloatSource) release() {
 	if len(s.data) > maxPooledEntries {
 		s.data = nil
+	} else {
+		clear(s.data)
 	}
 	kvIntFloatPool.Put(s)
 }
@@ -52,6 +54,8 @@ func getKVIntStr() *kvIntStrSource {
 func (s *kvIntStrSource) release() {
 	if len(s.data) > maxPooledEntries {
 		s.data = nil
+	} else {
+		clear(s.data)
 	}
 	kvIntStrPool.Put(s)
 }
@@ -71,6 +75,8 @@ func getKVStrFloat() *kvStrFloatSource {
 func (s *kvStrFloatSource) release() {
 	if len(s.data) > maxPooledEntries {
 		s.data = nil
+	} else {
+		clear(s.data)
 	}
 	kvStrFloatPool.Put(s)
 }

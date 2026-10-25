@@ -1,6 +1,7 @@
 package feature
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/liamlmy/OpsFeature/utils"
@@ -38,6 +39,13 @@ func (c *emitCtx) reserve(n int) {
 }
 
 func (b *Base) emit(v value, outSlot int, ctx *emitCtx) {
+	if ctx.st.err != nil {
+		return
+	}
+	if !v.comparable() {
+		ctx.st.fail(fmt.Errorf("feature %q: unsupported non-comparable value %T", b.name, v.iface))
+		return
+	}
 	if !b.isSeq && ctx.dedup != nil {
 		if ctx.dedup.seen(v) {
 			return
@@ -48,18 +56,18 @@ func (b *Base) emit(v value, outSlot int, ctx *emitCtx) {
 		if s, err := v.toString(); err == nil {
 			ctx.acc = append(ctx.acc, s)
 		} else {
-			logf("addcol convert failed, feature=%s class=%s slot_id=%d err=%v",
-				b.name, b.class, b.slotID, err)
+			ctx.st.fail(fmt.Errorf("feature %q addcol: %w", b.name, err))
+			return
 		}
 	}
 
-	if b.slotID == 0 {
+	if b.slotID == 0 || b.strOut {
 		return
 	}
 
 	var fid uint64
 	need := true
-	if b.listCache && !b.strOut {
+	if b.listCache {
 		if c := ctx.st.fids[b.name]; c != nil {
 			if cached, ok := c.get(v); ok {
 				fid, need = cached, false
@@ -71,8 +79,7 @@ func (b *Base) emit(v value, outSlot int, ctx *emitCtx) {
 		var err error
 		fid, err = b.computeFid(v)
 		if err != nil {
-			logf("compute fid failed, feature=%s class=%s hash_version=%d slot_id=%d err=%v",
-				b.name, b.class, b.hashVersion, b.slotID, err)
+			ctx.st.fail(fmt.Errorf("feature %q FID: %w", b.name, err))
 			return
 		}
 		if b.listCache {
@@ -85,9 +92,6 @@ func (b *Base) emit(v value, outSlot int, ctx *emitCtx) {
 		}
 	}
 
-	if b.strOut {
-		return
-	}
 	*ctx.out = append(*ctx.out, Fid{Slot: outSlot, Val: fid})
 }
 

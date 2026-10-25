@@ -20,6 +20,10 @@ func New(r io.Reader) (*Extractor, error) {
 
 	seenName := make(map[string]bool)
 	seenSlot := make(map[int]string)
+	var ranges []struct {
+		start, end int
+		name       string
+	}
 
 	s := bufio.NewScanner(r)
 	for lineNo := 1; s.Scan(); lineNo++ {
@@ -51,6 +55,21 @@ func New(r io.Reader) (*Extractor, error) {
 			seenSlot[b.slotID] = b.name
 		}
 
+		start, end := b.slotID, b.slotID
+		if b.isSeq {
+			start, end = b.slots.start, b.slots.end
+		}
+		if b.slotID != 0 && !b.strOut {
+			for _, r := range ranges {
+				if start <= r.end && r.start <= end {
+					return nil, fmt.Errorf("operator: feature conf line %d: output slots of %q overlap %q", lineNo, b.name, r.name)
+				}
+			}
+			ranges = append(ranges, struct {
+				start, end int
+				name       string
+			}{start, end, b.name})
+		}
 		e.ops = append(e.ops, op)
 	}
 	if err := s.Err(); err != nil {
@@ -64,29 +83,54 @@ func New(r io.Reader) (*Extractor, error) {
 
 func (e *Extractor) Operators() []Operator { return e.ops }
 
+// Extract is atomic for the current sample: on failure it preserves only the
+// caller's existing output prefix and resets all intermediate sample state.
 func (e *Extractor) Extract(in *Input, st *State, out []Fid) ([]Fid, error) {
 	if st == nil {
 		st = NewState()
+		defer st.Reset()
 	}
 	st.ensure()
-
-	var firstErr error
-	var failed int
-
-	for _, op := range e.ops {
-		if err := op.Emit(in, st, &out); err != nil {
-			failed++
-			if firstErr == nil {
-				firstErr = err
-			}
+	st.err = nil
+	start := len(out)
+	for i, op := range e.ops {
+		err := op.Emit(in, st, &out)
+		if err == nil {
+			err = st.err
+		}
+		if err != nil {
+			clear(out[start:])
+			out = out[:start]
+			st.Reset()
+			return out, fmt.Errorf("operator: feature %q (%d/%d) failed: %w", op.Conf().name, i+1, len(e.ops), err)
 		}
 	}
-
-	if firstErr != nil {
-		return out, fmt.Errorf("operator: %d/%d features failed, first: %v",
-			failed, len(e.ops), firstErr)
-	}
 	return out, nil
+}
+
+// ValidateInputs checks the ordered graph against raw/global input names. New
+// cannot know a caller's schema, so package consumers invoke this explicitly.
+func (e *Extractor) ValidateInputs(names []string) error {
+	available := make(map[string]bool, len(names)+len(e.ops))
+	for _, name := range names {
+		available[name] = true
+	}
+	var failures []string
+	for _, op := range e.ops {
+		b := op.Conf()
+		for _, dep := range b.depends {
+			if !available[dep] {
+				failures = append(failures, fmt.Sprintf("feature %q: dependency %q is not an input or preceding addcol", b.name, dep))
+			}
+		}
+		if b.addcol {
+			available[b.name] = true
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("operator: invalid dependencies:\n%s", strings.Join(failures, "\n"))
+	}
+	return nil
 }
 
 func parseConfLine(raw string) (map[string]string, bool, error) {

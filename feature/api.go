@@ -1,5 +1,7 @@
 package feature
 
+import "fmt"
+
 // Base configuration accessors used by operator implementations.
 func (b *Base) Class() string     { return b.class }
 func (b *Base) SlotID() int       { return b.slotID }
@@ -20,6 +22,14 @@ func (b *Base) RequireDependsExactly(count int) error {
 	return b.requireDependsExactly(count)
 }
 func (b *Base) RequireArgs(count int) error { return b.requireArgs(count) }
+
+// RequireMaxArgs rejects unused arguments rather than silently ignoring typos.
+func (b *Base) RequireMaxArgs(count int) error {
+	if len(b.args) > count {
+		return fmt.Errorf("operator: feature %q has %d args, want at most %d", b.name, len(b.args), count)
+	}
+	return nil
+}
 
 type FakeSlotRange = fakeSlotRange
 

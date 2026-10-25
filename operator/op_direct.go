@@ -44,10 +44,13 @@ var directValueTypes = map[string]directValueType{
 }
 
 func (d *Direct) Init() error {
+	if err := d.RequireMaxArgs(4); err != nil {
+		return err
+	}
 	if err := d.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
-	if err := d.RequireDepends(1); err != nil {
+	if err := d.RequireDependsExactly(1); err != nil {
 		return err
 	}
 

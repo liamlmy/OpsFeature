@@ -40,7 +40,7 @@ func (b *Bucket) Init() error {
 	if err := b.ParseHashArgs(0, 1); err != nil {
 		return err
 	}
-	if err := b.RequireDepends(1); err != nil {
+	if err := b.RequireDependsExactly(1); err != nil {
 		return err
 	}
 	if err := b.RequireArgs(4); err != nil {
@@ -62,6 +62,9 @@ func (b *Bucket) Init() error {
 			f, err := b.ArgFloat(i)
 			if err != nil {
 				return err
+			}
+			if len(b.thresholds) > 0 && f < b.thresholds[len(b.thresholds)-1] {
+				return fmt.Errorf("operator: feature %q thresholds must be nondecreasing", b.Name())
 			}
 			b.thresholds = append(b.thresholds, f)
 		}
@@ -157,10 +160,20 @@ func (d *BucketTruncate) Init() error {
 			return err
 		}
 		if low > high {
-			low, high = high, low
+			return fmt.Errorf("operator: feature %q reversed interval [%d,%d]", d.Name(), low, high)
+		}
+		for _, r := range d.ranges {
+			if low <= r.high && r.low <= high {
+				return fmt.Errorf("operator: feature %q overlapping intervals", d.Name())
+			}
+		}
+		const maxPosition = int64(1<<63 - 1)
+		span := uint64(high) - uint64(low)
+		if span >= uint64(maxPosition) || int64(span)+1 > maxPosition-d.total {
+			return fmt.Errorf("operator: feature %q interval positions overflow int64", d.Name())
 		}
 		d.ranges = append(d.ranges, intRange{low: low, high: high})
-		d.total += int64(high-low) + 1
+		d.total += int64(span) + 1
 	}
 	return nil
 }
@@ -174,10 +187,10 @@ func (d *BucketTruncate) Emit(in *feature.Input, st *feature.State, out *[]featu
 	var pos int64
 	for _, r := range d.ranges {
 		if v >= r.low && v <= r.high {
-			pos += int64(v - r.low)
+			pos += int64(v) - int64(r.low)
 			break
 		}
-		pos += int64(r.high-r.low) + 1
+		pos += int64(r.high) - int64(r.low) + 1
 	}
 	if pos >= d.total {
 		pos = 0
