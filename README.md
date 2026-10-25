@@ -1,491 +1,320 @@
 # OpsFeature
 
-OpsFeature 是一个使用 Go 实现的配置驱动型离线特征抽取工具。程序从标准输入逐行读取 TSV 样本，按照特征配置依次执行直接取值、分桶、序列、交叉、算术和缩放等算子，最终输出：
+OpsFeature 是用 Go 实现的配置驱动型离线特征抽取工具。它从标准输入逐行读取 TSV 样本，按配置顺序执行算子，向标准输出写入标签与特征 ID：
 
 ```text
 label slot:fid slot:fid ...
 ```
 
-## 核心特性
-
-- 使用两层配置描述输入字段和特征算子，无需为每批特征修改主程序。
-- 支持标量、KV、标签集合、整数序列、浮点向量和字段化序列。
-- 支持通过 `addcol` 串联多个算子，生成派生特征和交叉特征。
-- 支持五种 FID 编码方式，包括 CityHash、数值编码和共享槽位。
-- 在样本间复用 `Input`、`State` 和结果切片，并缓存复杂字段解析结果。
-- 多值 map 在输出前按 key 排序，保证相同输入产生稳定的输出顺序。
-
-## 目录结构
-
-```text
-.
-├── main.go                 # 命令行入口和逐行处理循环
-├── feature/
-│   ├── parser.go           # parse.conf、TSV 输入和最终输出
-│   ├── extract.go          # 特征配置加载与算子执行
-│   ├── feature.go          # Operator 接口和公共配置 Base
-│   ├── registry.go         # 算子注册表
-│   ├── depend.go           # 依赖查找与类型转换
-│   ├── source.go           # KV、序列和向量数据源
-│   ├── state.go            # 单条样本的中间状态与缓存
-│   ├── fid.go              # 去重、缓存和 FID 生成
-│   └── api.go              # 提供给 operator 包的公开接口
-├── operator/
-│   ├── op_registry.go      # 内置算子注册
-│   ├── op_direct.go        # 直接取值
-│   ├── op_bucket.go        # 分桶与区间离散化
-│   ├── op_seq.go           # 序列和向量
-│   ├── op_combine.go       # 特征交叉与缩放
-│   └── op_arith.go         # 算术派生
-└── utils/                  # CityHash、数组和数值工具
-```
-
-## 处理流程
-
-```mermaid
-flowchart TD
-    A[parse.conf] --> B[InitParser]
-    C[features.conf] --> D[创建有序算子列表]
-    E[operator.init] --> F[算子注册表]
-    F --> D
-    B --> D
-
-    G[stdin 中的一行 TSV] --> H[字段名到原始值的映射]
-    H --> I[Input.Score]
-    I --> J[Extractor 按配置顺序执行算子]
-    K[State 中间特征与缓存] --> J
-    J --> K
-    J --> L[Fid 列表]
-    H --> M[生成 label 和附加 token]
-    L --> N[输出 label slot:fid ...]
-    M --> N
-```
-
-初始化阶段：
-
-1. `InitParser` 加载 `parse.conf`。
-2. 根据 `feature_list` 打开特征配置文件。
-3. 根据每行的 `class` 从注册表创建算子。
-4. 加载公共配置，执行算子的 `Init()`，再进行公共校验。
-5. 按配置文件中的顺序保存算子。
-
-运行阶段：
-
-1. 从标准输入读取一行 TSV。
-2. 按 `fea_cols` 将字段映射为 `Input.Score`。
-3. 重置当前样本的 `State`。
-4. 按配置顺序执行全部算子。
-5. 生成 label、FID 列表和可选 token。
-6. 将结果写入标准输出。
-
-项目不会构建依赖图或自动进行拓扑排序，因此**特征配置顺序就是算子执行和中间特征依赖顺序**。
-
-## 环境与构建
-
-- Go 1.27.1 或兼容版本
-- 当前项目没有第三方 Go 依赖
-
-编译检查：
-
-```bash
-go test ./...
-```
-
-构建命令行程序：
-
-```bash
-go build -o opsfeature .
-```
-
-当前仓库没有测试文件，`go test ./...` 主要用于编译检查。
+支持直接取值、分桶、序列、向量、二阶/三阶交叉、算术和对数缩放；通过 `addcol` 串联中间特征。当前没有第三方 Go 依赖。
 
 ## 快速开始
 
-准备 `parse.conf`：
+在仓库根目录执行。项目的 [go.mod](go.mod) 声明 Go **1.27.1**，请使用满足该要求的工具链。
 
-```ini
-feature_list=./features.conf
-fea_cols=traceid,user_id,item_price,interests,history,label_0,label_1
-label=label_0,label_1
-add_token=traceid,user_id
-debug=0
-filter=
+```bash
+go build -o opsfeature .
+./opsfeature examples/minimal/parse.conf < examples/minimal/input.tsv > /tmp/opsfeature-output.txt
+diff -u examples/minimal/output.txt /tmp/opsfeature-output.txt
 ```
 
-准备 `features.conf`：
+`diff` 没有输出即表示结果一致。示例文件均已提供：
 
-```ini
-name=item_price;class=Direct;slot_id=10;depend=item_price;args=3,1,double
-name=interest;class=Direct;slot_id=11;depend=interests;args=0,1,kv_str_float,0
-name=history_seq;class=Seq;slot_id=12;depend=history;args=1,1,32768,32770,3,0
+| 文件 | 用途 |
+|---|---|
+| [examples/minimal/parse.conf](examples/minimal/parse.conf) | 输入列、标签、附加字段和特征配置路径 |
+| [examples/minimal/features.conf](examples/minimal/features.conf) | 价格取值、价格分桶和历史序列 |
+| [examples/minimal/input.tsv](examples/minimal/input.tsv) | 两条输入样本，使用真实 Tab 分隔 |
+| [examples/minimal/output.txt](examples/minimal/output.txt) | 对应的完整预期输出，保留末尾 Tab |
+
+示例中 `12.5` 乘以系数 `100` 得到 FID `1250`；价格落入桶号 `1`；历史序列 `10_20` 补齐为三项，并输出到 `32768..32770`。第一条结果为（`\t` 表示真实 Tab）：
+
+```text
+1 10:1250 11:1 32768:10 32769:20 32770:0 #trace-001\t10001\t
 ```
 
-执行：
+根目录的 [parse.conf](parse.conf) 和 [feature_list.conf](feature_list.conf) 是规模更大的业务配置，需要与其列定义匹配的 TSV 输入。自定义配置的调用方式相同：
 
 ```bash
 ./opsfeature parse.conf < input.tsv > output.txt
 ```
 
-## parse.conf
+所有配置文件中的相对路径均以**程序运行时的工作目录**为基准。
 
-| 字段 | 必填 | 说明 |
-|---|---:|---|
-| `feature_list` | 是 | 特征配置文件路径；相对路径以程序当前工作目录为基准 |
-| `fea_cols` | 是 | TSV 列名，使用逗号分隔，顺序必须与输入一致 |
-| `label` | 否 | 标签列名，使用逗号分隔 |
-| `add_token` | 否 | 追加到输出 `#` 后面的原始字段 |
-| `debug` | 否 | 整数；值为 `1` 时提示 debug 输出暂不支持，随后按普通模式运行 |
-| `filter` | 否 | 当前只读取并保存，尚未执行过滤逻辑 |
+## 代码结构
 
-解析规则：
-
-- 空行和以 `#` 开头的行会被忽略。
-- 每个非空配置项必须采用 `key=value` 格式。
-- 以双引号开头的 value 会通过 `strconv.Unquote` 解析。
-- `$name` 和 `${name}` 会引用同一配置文件中的字段，不会读取系统环境变量。
-- `fea_cols`、`label` 和 `add_token` 按逗号直接切分，不会自动清理每个元素两侧的空格。
-
-## 特征配置
-
-每行定义一个算子，字段使用分号分隔：
-
-```ini
-name=price;class=Direct;slot_id=10;depend=item_price;args=3,1,double
+```text
+.
+├── main.go                  # CLI：读取样本、重置状态、抽取并输出
+├── main_test.go             # CLI 示例、坏行、长行和退出状态测试
+├── go.mod
+├── parse.conf               # 业务输入/输出配置
+├── feature_list.conf        # 业务特征配置
+├── examples/minimal/        # 可直接运行的最小示例及预期输出
+├── feature/                 # 配置与抽取运行时
+│   ├── parser.go            # parse.conf 加载和 Parser 初始化
+│   ├── input.go             # Input、TSV 解析和必填标识检查
+│   ├── output.go            # 标签与附加 token 格式化
+│   ├── extract.go           # 特征配置加载、校验和按序执行
+│   ├── feature.go           # Operator 接口、Base 配置和参数校验
+│   ├── registry.go          # 算子注册与创建
+│   ├── api.go               # 提供给 operator 包的公共接口
+│   ├── depend.go            # 依赖查找和类型转换
+│   ├── source.go            # KV、序列和向量数据解析
+│   ├── source_pool.go       # 数据源对象池与回收
+│   ├── state.go             # 样本状态、重置和有序 map key
+│   ├── cache.go             # FID 缓存与多值去重
+│   ├── value.go             # 内部标量表示、转换和哈希
+│   ├── fid.go               # Fid 类型、编码和统一输出入口
+│   ├── extract_test.go      # 算子链路、编码和输出测试
+│   └── parser_test.go       # 列名校验与附加 token 测试
+├── operator/                # 算子实现及注册
+│   ├── op_registry.go
+│   ├── op_direct.go
+│   ├── op_bucket.go
+│   ├── op_seq.go
+│   ├── op_combine.go
+│   ├── op_arith.go
+│   └── op_scale.go
+├── utils/                   # 数组、数值、精度、哈希、地理和时间工具
+└── todo.md                  # 已知风险与后续改进项
 ```
 
-支持 `#` 行尾注释：
+`feature` 包负责配置和运行时，`operator` 包依赖它实现算子，并在 `init()` 中注册。命令行入口通过副作用导入加载全部内置算子。
+
+## 处理流程
+
+1. `InitParser` 读取输入/输出配置和特征配置。
+2. 根据 `class` 创建算子，依次加载公共配置、执行 `Init()`、校验公共字段。
+3. 每条 TSV 按 `fea_cols` 映射为原始字段，检查列数和必填标识。
+4. 调用 `State.Reset()`，按配置顺序执行算子。
+5. 生成标签、FID 列表和可选附加 token，写入标准输出。
+
+**配置顺序就是执行顺序**，项目不会构建依赖图或自动拓扑排序。单个算子报错后，其余算子仍继续执行；CLI 记录错误并可能输出已生成的部分 FID。
+
+## 输入与输出配置
+
+最小示例的 `parse.conf`：
 
 ```ini
-name=price;class=Direct;slot_id=10;depend=item_price;args=3,1,double # 商品价格
+feature_list=./examples/minimal/features.conf
+fea_cols=traceid,user_id,item_price,history,label_0,label_1
+label=label_0,label_1
+add_token=traceid,user_id
+debug=0
 ```
 
-### 通用字段
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `feature_list` | 是 | 特征配置路径 |
+| `fea_cols` | 是 | 逗号分隔的 TSV 列名，顺序与输入一致 |
+| `label` | 否 | 逗号分隔的标签列名；未配置时输出 `0` |
+| `add_token` | 否 | 追加到输出 `#` 后面的原始字段，必须存在于 `fea_cols` |
+| `debug` | 否 | 整数；为 `1` 时打印暂不支持的提示，随后按普通模式运行 |
+| `filter` | 否 | 只读取和保存，尚未执行过滤 |
+
+配置采用 `key=value` 格式，忽略空行和以 `#` 开头的行；这里不支持行尾注释。以双引号开头的值通过 `strconv.Unquote` 解析。
+
+`$name` 和 `${name}` 引用同一配置文件中的字段，不读取系统环境变量。当前展开仅遍历一次，多层和循环引用没有可靠保证，建议直接填写路径。
+
+`fea_cols` 和 `add_token` 拒绝空列名、重复列名及带首尾空格的列名。`label` 当前只按逗号切分，不会逐项清理空格，也不在初始化时检查其是否存在于 `fea_cols`。未知的配置项会保留，重复 key 以后一个为准。
+
+## 特征配置与依赖
+
+每行定义一个算子，字段用分号分隔，支持 `#` 行尾注释：
+
+```ini
+name=price;class=Direct;slot_id=10;depend=item_price;args=1,100,double # 价格放大 100 倍
+```
 
 | 字段 | 必填 | 说明 |
-|---|---:|---|
-| `name` | 是 | 特征名称，必须唯一；也是 `addcol` 中间结果的名称 |
-| `class` | 是 | 算子类型 |
-| `slot_id` | 是 | 基础槽位，范围 `0..32768`；为 `0` 时不写出 FID |
-| `depend` | 视算子而定 | 依赖字段，多个字段使用逗号分隔 |
-| `args` | 视算子而定 | 算子参数，多个参数使用逗号分隔 |
+|---|---|---|
+| `name` | 是 | 唯一特征名，也是写入中间结果的名称 |
+| `class` | 是 | 已注册的算子名称，区分大小写 |
+| `slot_id` | 是 | 基础槽位，范围 `0..32768`；`0` 不输出 FID |
+| `depend` | 视算子而定 | 逗号分隔的依赖字段 |
+| `args` | 视算子而定 | 逗号分隔的算子参数 |
 | `share_slot` | hash version 4 必填 | 共享哈希槽位，范围 `1..32767` |
-| `addcol` | 否 | 非零时把算子产生的值保存到 `State.inner` |
+| `addcol` | 否 | 非零时将产生的值转成字符串列表，保存到 `State.inner` |
 | `list_cache` | 否 | 非零时在当前样本内缓存该特征的 FID 计算结果 |
-| `enable_str_out` | 否 | 非零时不把 FID 加入最终结果，通常配合 `addcol` 使用 |
+| `enable_str_out` | 否 | 非零时不向最终列表追加 FID，通常配合 `addcol` 使用 |
 
-未知配置字段、重复特征名和重复的非零基础 `slot_id` 都会导致初始化失败。
+未知字段、重复 key、重复特征名和重复非零基础 `slot_id` 会导致初始化失败。不同序列的 fake slot 区间尚未做全局冲突检查。
 
-### 依赖与中间特征
-
-依赖字段按照以下顺序查找：
+依赖查找优先级：
 
 ```text
 Input.Global → Input.Score → State.inner
 ```
 
-因此：
-
-- `Input.Global` 的优先级高于当前候选的 `Input.Score`。
-- 原始输入会覆盖同名的 `addcol` 中间特征。
-- 下游算子依赖上游 `addcol` 结果时，上游算子必须出现在配置文件前面。
-- 可以使用 `slot_id=0;addcol=1` 创建只供后续算子使用、不直接输出 FID 的中间特征。
-
-例如：
+原始输入优先于同名中间特征。下游使用 `addcol` 时，上游必须出现在前面，且应使用独立的中间特征名。例如：
 
 ```ini
 name=user_tags;class=Direct;slot_id=0;depend=interests;args=0,1,str_dict;addcol=1
 name=user_item_cross;class=Combine;slot_id=20;depend=user_tags,item_type;args=addcol,0,1
 ```
 
+这里的 `interests` 和 `item_type` 需要来自输入；`interests=sports,music`、`item_type=book` 会交叉出 `sports_book` 和 `music_book`。
+
 ## FID 编码
 
-大部分算子的参数中都包含 `hash_version` 和 `coeff`：
+`Fid` 包含输出槽位 `Slot` 和编码结果 `Val`。文本格式为 `Slot:Val`。多数算子的前两个参数是 `hash_version`、`coeff`，但 `Combine` 和 `Arithmetic` 的位置不同，见下文。
 
-| 版本 | 行为 |
-|---:|---|
-| `0` | `slot_id << 48 \| CityHash64(value)低48位` |
-| `1` | 将数值乘以 `coeff` 后直接作为 FID，不嵌入 slot |
-| `2` | `slot_id << 48 \| (value × coeff)低48位` |
-| `3` | 转换为 `float32`，使用其二进制位模式，不嵌入 slot |
-| `4` | 将值转成字符串后进行 CityHash，并与 `share_slot` 组合 |
+| hash version | 编码规则 |
+|---|---|
+| `0` | 基础 `slot_id` 左移 48 位，与值的 CityHash64 低 48 位组合；哈希输入与值的类型有关 |
+| `1` | 将数值乘以系数后转为无符号整数，不嵌入 slot |
+| `2` | 将数值按版本 1 转换，再取低 48 位并嵌入基础 `slot_id` |
+| `3` | 转为 `float32`，以其二进制位模式作为 FID；不嵌入 slot，忽略系数 |
+| `4` | 将值转成字符串做 CityHash，与 `share_slot` 组合；忽略系数 |
 
-当 `coeff <= 1e-6` 时，版本 1 和版本 2 使用默认系数 `1`。
+版本 1/2 在 `coeff <= 1e-6` 时使用系数 `1`。当前整数路径会先把系数转换为整数，小数系数可能被截断；大数乘法也没有完整的溢出保护。字符串值不能直接使用版本 1/2。详细风险见 [todo.md](todo.md)。
 
-最终结果中的 `Fid` 同时保存：
+序列输出的 `Slot` 是对应位置的 fake slot；版本 0/2 的 FID 内嵌槽位仍是配置的**基础 `slot_id`**，版本 4 使用 `share_slot`。
 
-- `Slot`：输出文本中冒号左侧的槽位。
-- `Val`：按照 hash version 计算出的 FID 数值。
+## 内置算子
 
-对于序列算子，输出 `Slot` 是对应位置的 fake slot，而 FID 数值是否嵌入基础 `slot_id` 取决于 hash version。
-
-## 支持的算子
+以下 `args` 参数均从下标 `0` 开始。没有特别说明时，`hash_version` 默认为 `0`，版本 1/2 的有效默认系数为 `1`。
 
 ### Direct
 
-直接读取依赖字段。
-
 ```text
-args[0] hash_version
-args[1] coeff
-args[2] value_type，默认 double
-args[3] col，默认 0
+args=hash_version,coeff,value_type,col
 ```
+
+`value_type` 默认 `double`，`col` 默认 `0`。
 
 | value_type | 输入示例 | 行为 |
 |---|---|---|
-| `double` | `12.5` | 输出单个数值 |
-| `str_pos` | `vip` | 输出单个字符串 |
-| `kv_int_float` | `101:0.8,205:1.5` | 通过 `col` 选择整数 key 对应的数值 |
-| `kv_int_str` | `101:vip,205:new` | 通过 `col` 选择整数 key 对应的字符串 |
-| `str_dict` | `sports,music,travel` | 按逗号拆分并输出多个字符串特征 |
-| `kv_str_float` | `sports:0.8,music:1.5` | `col=0` 输出字符串 key，否则输出数值 value |
-| `tags` | `1001:0.7,1002:0.3` | `col=0` 输出整数 key，否则输出数值 value |
-| `add_col` | 上游算子结果 | 读取之前写入 `State.inner` 的值 |
+| `double` | `12.5` | 单个数值 |
+| `str_pos` | `vip` | 第一个依赖字段的单个字符串；空值不输出 |
+| `kv_int_float` | `101:0.8,205:1.5` | `col` 指定整数 key，输出对应数值 |
+| `kv_int_str` | `101:vip,205:new` | `col` 指定整数 key，输出对应字符串 |
+| `str_dict` | `sports,music` | 逗号切分并去重输出字符串 |
+| `kv_str_float` | `sports:0.8,music:1.5` | `col=0` 输出 key，否则输出数值 |
+| `tags` | `1001:0.7,1002:0.3` | `col=0` 输出整数 key，否则输出数值 |
+| `add_col` | 上游的中间结果 | 展开字符串、浮点或整数列表，也支持单值；遵循统一依赖优先级 |
 
-### Bucket
+map 多值按 key 排序后输出，保证顺序稳定。数值取值遇到 `-999` 时通常按 `0` 处理，依赖名为 `UBDiscountRatio`、`UBDiscountAvg` 时保留原值。
 
-数值分桶：
+### Bucket / Bucket_truncate
 
 ```text
-args[0] hash_version
-args[1] coeff
-args[2] abslisan 或 dummy
-args[3:] 阈值或枚举表
+Bucket:          args=hash_version,coeff,mode,阈值或枚举值...
+Bucket_truncate: args=hash_version,coeff,low,high[,low,high...]
 ```
 
-- `abslisan`：将数值保留约 6 位有效精度、处理缺失值、取绝对值，再在升序阈值表中查找桶号。
-- `dummy`：在整数枚举表中查找位置，未命中时输出 `len(enums)`。
+- `Bucket.abslisan`：处理数值精度和缺失值后取绝对值，在升序阈值表中查桶。当前不校验阈值顺序，且单阈值表总返回 `0`。
+- `Bucket.dummy`：返回整数在枚举表中的下标，未命中返回枚举数量；`-999` 按 `0` 处理。
+- `Bucket_truncate`：按配置顺序将闭区间映射到连续位置，从 `0` 开始。区间端点倒置时自动交换；未命中返回 `0`，不检查区间重叠。
 
 ```ini
 name=price_bucket;class=Bucket;slot_id=30;depend=item_price;args=1,1,abslisan,10,50,100
-```
-
-`abslisan` 不会主动检查阈值是否升序。
-
-### Bucket_truncate
-
-将整数映射到若干闭区间组成的连续位置空间：
-
-```text
-args[0] hash_version
-args[1] coeff
-args[2:] low,high 成对出现
-```
-
-```ini
 name=age_range;class=Bucket_truncate;slot_id=31;depend=age;args=1,1,0,17,18,35,36,60
 ```
 
-未命中任何区间时输出位置 `0`。
+### Seq / Seq_field / Seq_emb
 
-### Seq
-
-解析 `_` 分隔的无符号整数序列，并按位置输出到 fake slot：
+三者公共的前五个参数：
 
 ```text
 args[0] hash_version
 args[1] coeff
 args[2] slot_start，必须 >= 32768
 args[3] slot_end
-args[4] num，必须等于 slot_end-slot_start+1
-args[5] padding 默认值，可选
+args[4] num，必须 > 0 且等于 slot_end-slot_start+1
 ```
+
+| class | 输入 | 后续参数与行为 |
+|---|---|---|
+| `Seq` | `10_20_30` | `args[5]` 为无符号整数 padding 值，默认 `0`；非空序列补齐/截断到 `num`，空输入不输出 |
+| `Seq_field` | `0:1_2,1:3_4` | `args[5]` 选择字段，默认 `0`；`args[6]` 为 `int` 或 `str`，默认 `int`；`args[7]=1` 启用 padding；`args[8]` 为默认值；未找到子序列或子序列为空时不输出 |
+| `Seq_emb` | `0.1,0.2,0.3` | `args[5]` 为 padding 长度，只能是 `0` 或 `num`；`args[6]` 为默认值；空输入也会按配置长度补齐 |
+
+`Seq_field` 配置第二个依赖字段时，将其作为基准时间，计算 `(base_timestamp - sequence_value) / 86400`。
 
 ```ini
 name=history_seq;class=Seq;slot_id=40;depend=history;args=1,1,32768,32770,3,0
-```
-
-输入 `10_20` 会得到 `10,20,0`，分别输出到 `32768..32770`。
-
-### Seq_field
-
-从字段化序列中选择一个子序列。输入格式：
-
-```text
-0:1_2_3,1:4_5_6
-```
-
-```text
-args[0..4] 与 Seq 相同
-args[5] field index，默认 0
-args[6] 元素类型：int 或 str，默认 int
-args[7] 是否启用 padding，1 表示启用
-args[8] padding 默认值
-```
-
-当配置第二个依赖字段时，该字段被视为基准时间，输出值为：
-
-```text
-(base_timestamp - sequence_value) / 86400
-```
-
-### Seq_emb
-
-解析逗号分隔的浮点向量，并按位置输出到 fake slot：
-
-```text
-args[0..4] 与 Seq 相同
-args[5] padding 长度，必须为 0 或等于 num
-args[6] padding 默认值
-```
-
-```ini
 name=embedding;class=Seq_emb;slot_id=41;depend=embedding;args=3,1,32771,32773,3,3,0
 ```
 
+同一依赖字段使用不同 padding 参数时可能发生缓存串用，详见“当前限制”。
+
 ### Combine / Combine_multi
 
-分别执行二阶和三阶笛卡尔积交叉：
-
 ```text
-args[0] 必须是 addcol
-args[1] hash_version
-args[2] coeff
+args=addcol,hash_version,coeff
 ```
 
-依赖数量必须严格为 2 或 3。交叉值使用 `_` 连接，例如 `vip` 和 `book` 组合成 `vip_book`。
+`Combine` 严格要求两个依赖，`Combine_multi` 严格要求三个。对依赖值列表做笛卡尔积，用 `_` 连接并去重。首个参数必须是字面量 `addcol`，依赖可以是原始单值或上游的列表结果。
 
 ```ini
 name=user_item_cross;class=Combine;slot_id=50;depend=user_type,item_type;args=addcol,0,1
 ```
 
+原始的逗号分隔字符串不会在这里自动展开，应先通过 `Direct.str_dict` 和 `addcol=1` 转成列表。
+
 ### Arithmetic
 
-从两个依赖字段计算派生数值：
-
 ```text
-args[0] operation
-args[1] hash_version
-args[2] coeff
+args=operation,hash_version,coeff
 ```
+
+至少需要两个依赖，使用前两个。
 
 | operation | 行为 |
 |---|---|
-| `add` | 左值加右值；`-999` 按 `0` 处理 |
-| `minus` | 左值减右值；`-999` 按 `0` 处理 |
-| `multiply` | 左值乘右值；`-999` 按 `0` 处理 |
+| `add` | 左值加右值，`-999` 按 `0` 处理 |
+| `minus` | 左值减右值，`-999` 按 `0` 处理 |
+| `multiply` | 左值乘右值，`-999` 按 `0` 处理 |
 | `match` | 两边都为空输出 `2`，相同输出 `1`，否则输出 `0` |
-| `div` | 左值除右值；任一值接近 `0` 时输出 `0` |
-| `cos` | 两个逗号分隔向量的余弦相似度 |
+| `div` | 左值除右值，任一值接近 `0` 时输出 `0` |
+| `cos` | 两个逗号分隔向量的余弦相似度；空向量或长度不等时不输出，零范数向量输出 `0` |
 
 ```ini
 name=price_diff;class=Arithmetic;slot_id=60;depend=price_a,price_b;args=minus,3,1
-name=price_sum;class=Arithmetic;slot_id=63;depend=price_a,price_b;args=add,3,1
-name=price_product;class=Arithmetic;slot_id=64;depend=price_a,price_b;args=multiply,3,1
 ```
 
 ### Scale
 
-对单个数值进行缩放：
-
 ```text
-args[0] hash_version
-args[1] coeff
-args[2] mode，默认 log
+args=hash_version,coeff,mode
 ```
 
-目前仅支持 `log`：负数先截断为 `0`，然后计算 `log(value+1)`。
+`mode` 默认且目前仅支持 `log`：先将负数截断为 `0`，再计算 `log(value+1)`。
 
 ```ini
 name=price_log;class=Scale;slot_id=61;depend=item_price;args=3,1,log
 ```
 
-## 输入格式
+## 输入、标签与附加字段
 
-标准输入中的每一行都是一条 TSV 数据，字段数量必须与 `fea_cols` 完全一致：
+每行输入一条 TSV，列数必须与 `fea_cols` 完全一致。空行、列数不符以及必填标识为空的行会跳过并写诊断信息。仅当输入列中配置了 `traceid` 或 `s_id` 时，它们才属于必填标识，纯空白同样视为空。
 
-```text
-trace-001\t10001\t12.5\tsports:0.8,music:1.5\t10_20\t0\t1
-```
+CLI 的 Scanner 单行缓冲上限为 8 MiB，接近该上限时还需考虑行结束符。输入读取失败或超限会终止程序并返回退出码 `1`。
 
-输入规则：
+标签规则：
 
-- 空行会被跳过。
-- 字段数量不一致的行会被跳过。
-- 如果 `fea_cols` 中包含 `traceid` 或 `s_id`，对应字段不能为空。
-- Scanner 的单行输入上限为 8 MiB。
-- 错误信息写入标准错误，正常结果写入标准输出。
+1. 未配置 `label` 时输出 `0`。
+2. 按配置顺序读取标签；访问到空值或不存在的字段时报错并跳过该行。
+3. 找到第一个不等于字符串 `0` 的标签后立即停止。下标为 `i` 时输出 `len(labelList)-i`，不再检查后面的标签。
+4. 全部为 `0` 时输出 `0`。
 
-## 输出格式
+例如 `label=label_0,label_1` 时，`0,1` 输出 `1`，`1,0` 输出 `2`；输入标签不会作为原始值直接输出。
 
-基本格式：
+配置 `add_token` 后的格式：
 
 ```text
-label slot:fid slot:fid ...
+label slot:fid ... #token1\ttoken2\t
 ```
 
-配置 `add_token` 后：
+token 严格按配置顺序输出，空字符串保留字段位置；末尾始终有一个终止 Tab。消费者应先去掉**恰好一个**终止 Tab，再按 Tab 切分，避免丢失末尾空字段。包 API 会拒绝缺失的 token 字段或包含 Tab、回车、换行的 token 值。
 
-```text
-label slot:fid slot:fid ... #token1\ttoken2\t
-```
-
-标签生成规则：
-
-- 未配置 `label` 时输出 `0`。
-- 所有标签字段都必须非空，否则当前行不会输出。
-- 如果所有标签都是 `0`，输出 `0`。
-- 按配置顺序查找第一个非零标签；其下标为 `i` 时，输出 `len(labelList)-i`。
-
-`add_token` 区域会在最后一个成功写入的 token 后保留一个制表符。
-
-## State、缓存与复用
-
-`State` 保存单条样本执行期间的可变状态：
-
-- `inner`：`addcol` 产生的中间特征。
-- `sources`：KV、序列和向量的解析结果。
-- `fids`：开启 `list_cache` 后的 FID 缓存。
-- `dedup`：多值特征的去重集合。
-- `keyBuf`：map key 排序时使用的复用缓冲区。
-
-命令行入口会在每条新样本开始前调用 `State.Reset()`。作为 Go 包使用并自行复用 `State` 时，调用方也必须遵守这一约定，否则不同样本的中间状态可能相互污染。
-
-## 错误处理
-
-- parse.conf 或特征配置非法时，程序初始化失败并退出。
-- TSV 为空、列数不匹配或缺少必填标识字段时，当前行被跳过。
-- 标签字段缺失时，当前行不会输出。
-- 单个算子返回错误时，`Extractor` 会继续执行其他算子，并在结束后返回汇总错误。
-- 命令行入口打印算子错误后，仍会输出当前已经生成的部分 FID。
-- 部分复杂字段中的坏元素会被跳过；部分数字转换失败会按 `0` 处理。
-
-## 算子注册与扩展
-
-内置算子通过 `operator/op_registry.go` 的 `init()` 注册到 `feature` 包。根目录命令行入口已经副作用导入 `operator`。
-
-配置名称与 Go 实现的对应关系如下：
-
-| class | Go 结构体 |
-|---|---|
-| `Direct` | `operator.Direct` |
-| `Seq` | `operator.Seq` |
-| `Seq_field` | `operator.SeqField` |
-| `Seq_emb` | `operator.SeqEmb` |
-| `Bucket` | `operator.Bucket` |
-| `Bucket_truncate` | `operator.BucketTruncate` |
-| `Combine` | `operator.Combine`，二阶交叉 |
-| `Combine_multi` | `operator.Combine`，三阶交叉 |
-| `Arithmetic` | `operator.Arithmetic` |
-| `Scale` | `operator.Scale` |
-
-其他程序通过 `feature.New`、`feature.NewFromText` 或 `feature.InitParser` 使用内置算子时，也必须导入：
-
-```go
-import (
-    "github.com/liamlmy/OpsFeature/feature"
-    _ "github.com/liamlmy/OpsFeature/operator"
-)
-```
-
-新增算子需要：
-
-1. 实现 `feature.Operator` 的 `Conf()`、`Init()` 和 `Emit()`。
-2. 在 `operator` 包的 `init()` 中调用 `feature.Register`。
-3. 在 `Init()` 中解析参数并完成算子特有的配置校验。
-4. 在 `Emit()` 中通过统一的 `Emit*` 方法生成中间值和 FID。
+配置初始化失败和输入读取失败返回 `1`；逐行数据错误只跳过或记录，不会使最终退出码自动变为非零。正常结果写 stdout，诊断信息写 stderr。
 
 ## 作为 Go 包使用
+
+使用内置算子时，必须副作用导入 `operator` 包以完成注册：
 
 ```go
 package main
@@ -498,40 +327,52 @@ import (
 )
 
 func main() {
-    conf := "name=price;class=Direct;slot_id=10;depend=price;args=0,1,double"
-
-    extractor, err := feature.NewFromText(conf)
+    extractor, err := feature.NewFromText(
+        "name=price;class=Direct;slot_id=10;depend=price;args=1,100,double",
+    )
     if err != nil {
         panic(err)
-    }
-
-    input := &feature.Input{
-        Score: map[string]interface{}{
-            "price": "12.5",
-        },
     }
     state := feature.NewState()
-
-    fids, err := extractor.Extract(input, state, nil)
-    if err != nil {
-        panic(err)
+    var fids []feature.Fid
+    for _, price := range []string{"12.5", "75"} {
+        state.Reset()
+        input := &feature.Input{Score: map[string]interface{}{"price": price}}
+        fids, err = extractor.Extract(input, state, fids[:0])
+        if err != nil {
+            panic(err)
+        }
+        fmt.Println(fids)
     }
-    fmt.Println(fids)
+    // [{10 1250}]
+    // [{10 7500}]
 }
 ```
 
-处理下一条样本前，应先执行：
+也可使用 `feature.New(io.Reader)` 读取特征配置，或 `feature.InitParser(path)` 加载完整配置。`Extract` 会向传入切片追加结果；复用切片时需传入 `fids[:0]`。传入 `nil` State 时会自动创建，否则调用方必须在不同样本之间自行 `Reset()`。
 
-```go
-state.Reset()
+`State` 持有中间特征、解析后的数据源、FID 缓存、去重集合及排序缓冲。`Reset()` 清除样本中间结果和缓存，并将数据源归还对象池。一个 State 不应被多个 goroutine 并发使用。
+
+新增算子需实现 `feature.Operator` 的 `Conf()`、`Init()`、`Emit()`，在 `init()` 中调用 `feature.Register`，并通过 `Base` 提供的 `Emit*`/`Flush` 方法生成 FID 和中间特征。注册名即配置中的 `class`；已注册名称可通过 `feature.Classes()` 查询。
+
+## 开发与验证
+
+```bash
+go test ./...
+go vet ./...
+go build -o opsfeature .
 ```
+
+测试覆盖最小示例的完整输出、多行坏数据跳过、长行读取、初始化/读取失败的退出状态，以及 FID 编码、算子顺序、序列补齐、数组兼容行为、附加 token 和列名校验。
 
 ## 当前限制
 
-- `filter` 配置尚未执行实际过滤逻辑。
-- debug 模式尚未提供特征名级别的调试输出。
-- 数字解析失败时，部分路径会把值当作 `0`。
-- 同一依赖列被多个序列或向量算子使用不同 padding 参数读取时，数据源缓存可能复用先前解析结果。
-- 不同序列算子的 fake slot 范围尚未进行全局冲突检查。
-- 算子执行失败时，命令行入口仍可能输出部分 FID。
-- 当前没有自动化测试。
+- `filter` 尚未执行过滤；debug 尚无特征名级别的调试输出。
+- 复杂数据源缓存未完整包含解析参数，同一列以不同 padding 配置读取时可能复用先前结果。
+- 数值解析失败可能被当作 `0`，部分坏元素被跳过；数值缩放的小数系数和溢出处理仍需完善。
+- 序列 fake slot 区间没有全局冲突检查；部分坏元素处理可能改变后续位置。
+- `Extract` 可能返回部分 FID 和汇总错误，CLI 仍可能写出部分样本。FID 转换失败也可能只写日志而不进入汇总错误。
+- 交叉特征没有组合数量上限；公共 API 传入不支持的动态类型时，部分缓存或去重路径可能 panic。
+- 变量展开、配置和边界条件尚未全面校验，测试也未覆盖全部异常路径。
+
+后续工作与验收建议见 [todo.md](todo.md)。

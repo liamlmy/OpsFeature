@@ -1,8 +1,6 @@
 package feature
 
-import (
-	"strconv"
-)
+import "strconv"
 
 func (b *Base) lookup(name string, in *Input, st *State) (interface{}, bool) {
 	if v, ok := in.get(name); ok {
@@ -113,22 +111,20 @@ func toFloat64(v interface{}) (float64, bool) {
 	case uint64:
 		return float64(x), true
 	case string:
-		f, e := strconv.ParseFloat(x, 64)
-		if e == nil {
-			return f, true
-		} else {
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
 			return 0, false
 		}
+		return f, true
 	case []string:
 		if len(x) == 0 {
 			return 0, true
 		}
-		f, e := strconv.ParseFloat(x[0], 64)
-		if e == nil {
-			return f, true
-		} else {
+		f, err := strconv.ParseFloat(x[0], 64)
+		if err != nil {
 			return 0, false
 		}
+		return f, true
 	default:
 		return 0, false
 	}
@@ -149,7 +145,7 @@ func toInt(v interface{}) (int, bool) {
 	case float32:
 		return int(x), true
 	case string:
-		n, _ := strconv.Atoi(x) // 吞错理由同 toFloat64
+		n, _ := strconv.Atoi(x) // 保留历史行为：解析失败按 0 处理。
 		return n, true
 	case []string:
 		if len(x) == 0 {

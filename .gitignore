@@ -1,0 +1,11 @@
+# macOS directory metadata.
+.DS_Store
+
+# Local command-line build outputs.
+/opsfeature
+/OpsFeature
+/fea_extract_recon
+/coverage.out
+
+# Recoverable metadata from flattening the former nested checkout.
+/.opsfeature-layout-backup/

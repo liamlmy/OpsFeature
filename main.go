@@ -3,95 +3,77 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/liamlmy/OpsFeature/feature"
 	_ "github.com/liamlmy/OpsFeature/operator"
 )
 
+const (
+	initialInputBufferSize = 64 * 1024
+	maxInputLineSize       = 8 * 1024 * 1024
+)
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "cmd args len wrong, args len is", len(os.Args))
-		os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// run processes one input stream and returns the command's exit status.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "cmd args len wrong, args len is", len(args)+1)
+		return 1
 	}
 
-	// parse.conf文件地址
-	parseConfPath := os.Args[1]
-
-	// 初始化Parser
-	parser, err := feature.InitParser(parseConfPath)
+	parser, err := feature.InitParser(args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init offline extractor error: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "init offline extractor error: %v\n", err)
+		return 1
 	}
 
-	// if len(os.Args) > 2 {
-	// 	//fmt.Println("start to get feature info")
-	// 	cmd := os.Args[2]
-	// 	switch cmd {
-	// 	case "fea_size":
-	// 		parser.OutFeaSize()	// 输出所有特征长度之和 featureLength之和
-	// 	case "fea_slot":
-	// 		parser.OutFeaSlot()	// 输出每个特征的名字、槽位和长度，featureName, slot, featureLength
-	// 	case "thead":
-	// 		parser.OutFeaThead()	// 输出每个特征名字和长度下标
-	// 	}
-	// 	return
-	// }
+	// Reset the per-sample state and reuse the FID slice's backing array.
 	var (
-		featureData string
-	)
-
-	// ctx := context.Background()
-	// fmt.Println("Debug ||%v||", ctx)	// liam
-
-	// 跨行复用对象：State 每行 Reset，
-	// 结果 slice 每行传 [:0]，底层数组跨行复用，热路径上不重复分配。
-	var (
-		opInput = &feature.Input{}
-		opState = feature.NewState()
-		opFids  []feature.Fid
+		input = &feature.Input{}
+		state = feature.NewState()
+		fids  []feature.Fid
 	)
 	if parser.IsDebug == 1 {
-		// operator 包没有 Debug()，且 Fid 不带特征名，无法还原原有的 debug 行。
-		fmt.Fprintln(os.Stderr, "debug is not supported, fall back to normal output")
+		fmt.Fprintln(stderr, "debug is not supported, fall back to normal output")
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 64 * 1024), 8 * 1024 * 1024)
-	// 一行一行读入特征数据
+	scanner := bufio.NewScanner(stdin)
+	scanner.Buffer(make([]byte, initialInputBufferSize), maxInputLineSize)
 	for scanner.Scan() {
-		featureData = scanner.Text()
-		// 解析一行特征数据
-		featureMap, err := feature.ParseFeatureDataPerLineStrict(featureData, parser.FeatureNameList)
+		fields, err := feature.ParseFeatureDataPerLineStrict(scanner.Text(), parser.FeatureNameList)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "skip malformed input line: %v\n", err)
+			fmt.Fprintf(stderr, "skip malformed input line: %v\n", err)
 			continue
 		}
-		if !parser.ValidRequiredInput(featureMap) {
-			fmt.Fprintln(os.Stderr, "skip input line with empty required key fields")
+		if !parser.ValidRequiredInput(fields) {
+			fmt.Fprintln(stderr, "skip input line with empty required key fields")
 			continue
 		}
 
-		otherFeatureMap := make(map[string]interface{}, len(featureMap))
-		for k, v := range featureMap {
-			otherFeatureMap[k] = v
+		input.Score = make(map[string]interface{}, len(fields))
+		for name, value := range fields {
+			input.Score[name] = value
 		}
-		opInput.Score = otherFeatureMap
-		opState.Reset()
-		opFids, err = parser.OpExtractor.Extract(opInput, opState, opFids[:0])
+		state.Reset()
+		fids, err = parser.OpExtractor.Extract(input, state, fids[:0])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "operator Extract error: %v\n", err)
+			fmt.Fprintf(stderr, "operator Extract error: %v\n", err)
 		}
-		output, err := feature.OutputPerLineOp(featureMap, parser.LabelList, parser.AddTokenList, opFids)
+		output, err := feature.OutputPerLineOp(fields, parser.LabelList, parser.AddTokenList, fids)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "OutputPerLineOp error: %v\n", err)
+			fmt.Fprintf(stderr, "OutputPerLineOp error: %v\n", err)
 			continue
 		}
-		fmt.Println(output)
+		fmt.Fprintln(stdout, output)
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "read stdin error: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "read stdin error: %v\n", err)
+		return 1
 	}
+	return 0
 }

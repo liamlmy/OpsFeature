@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// Parser holds the input schema, output settings, and ordered feature extractor.
 type Parser struct {
 	OpExtractor     *Extractor
 	FeatureNameList []string
@@ -17,58 +18,58 @@ type Parser struct {
 	LabelList       []string
 	Label           string
 	Filter          string
-	requiredInput   []string
+
+	requiredInput []string
 }
 
+// InitParser loads parse.conf and the feature configuration it references.
 func InitParser(parseConfPath string) (*Parser, error) {
-	parseConfMap, err := loadParseConfig(parseConfPath)
+	conf, err := loadParseConfig(parseConfPath)
 	if err != nil {
 		return nil, err
 	}
-
-	featureListPath := getValue(parseConfMap, "feature_list")
+	featureListPath := conf["feature_list"]
 	if featureListPath == "" {
-		err = errors.New("feature_list not found")
-		return nil, err
+		return nil, errors.New("feature_list not found")
+	}
+	if conf["fea_cols"] == "" {
+		return nil, errors.New("fea_cols is blank")
 	}
 
-	parser := new(Parser)
-
-	feaCols := getValue(parseConfMap, "fea_cols")
-	if feaCols == "" {
-		err = errors.New("fea_cols is blank")
+	featureNames, err := parseColumnList(conf["fea_cols"], "fea_cols")
+	if err != nil {
 		return nil, err
 	}
-	var featureNameList []string
-	featureNameList = strings.Split(feaCols, ",")
-	parser.FeatureNameList = featureNameList
-	parser.Filter = getValue(parseConfMap, "filter")
-	parser.requiredInput = buildRequiredInput(featureNameList)
-
-	debugStr := getValue(parseConfMap, "debug")
-	var isDebug int
-	if debugStr != "" {
-		isDebug, err = strconv.Atoi(debugStr)
+	parser := &Parser{
+		FeatureNameList: featureNames,
+		Filter:          conf["filter"],
+		Label:           conf["label"],
+	}
+	parser.requiredInput = buildRequiredInput(featureNames)
+	if value := conf["debug"]; value != "" {
+		parser.IsDebug, err = strconv.Atoi(value)
 		if err != nil {
 			return nil, err
 		}
 	}
-	parser.IsDebug = isDebug
-
-	addToken := getValue(parseConfMap, "add_token")
-	var addTokenList []string
-	if addToken != "" {
-		addTokenList = strings.Split(addToken, ",")
+	if value := conf["add_token"]; value != "" {
+		parser.AddTokenList, err = parseColumnList(value, "add_token")
+		if err != nil {
+			return nil, err
+		}
 	}
-	parser.AddTokenList = addTokenList
-
-	label := getValue(parseConfMap, "label")
-	var labelList []string
-	if label != "" {
-		labelList = strings.Split(label, ",")
+	inputNames := make(map[string]bool, len(featureNames))
+	for _, name := range featureNames {
+		inputNames[name] = true
 	}
-	parser.LabelList = labelList
-	parser.Label = label
+	for _, name := range parser.AddTokenList {
+		if !inputNames[name] {
+			return nil, fmt.Errorf("add_token field %q not found in fea_cols", name)
+		}
+	}
+	if parser.Label != "" {
+		parser.LabelList = strings.Split(parser.Label, ",")
+	}
 	parser.OpExtractor, err = initOpExtractor(featureListPath)
 	if err != nil {
 		return nil, err
@@ -85,89 +86,19 @@ func initOpExtractor(featureListPath string) (*Extractor, error) {
 	return New(file)
 }
 
-func ParseFeatureDataPerLineStrict(data string, featureNameList []string) (map[string]string, error) {
-	if data == "" {
-		return nil, errors.New("empty line")
-	}
-	data = strings.TrimRight(data, "\r")
-
-	dataList := strings.Split(data, "\t")
-	if len(dataList) != len(featureNameList) {
-		return nil, fmt.Errorf("field count mismatch, got %d, want %d", len(dataList), len(featureNameList))
-	}
-	featureMap := make(map[string]string)
-	for i := 0; i < len(dataList); i++ {
-		if i >= len(featureNameList) {
-			break
+func parseColumnList(value, key string) ([]string, error) {
+	names := strings.Split(value, ",")
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name == "" || strings.TrimSpace(name) != name {
+			return nil, fmt.Errorf("%s contains an empty or whitespace-padded field name", key)
 		}
-		featureMap[featureNameList[i]] = dataList[i]
-	}
-	return featureMap, nil
-}
-
-func OutputPerLineOp(featureMap map[string]string, labelList []string, addTokenList []string, fidList []Fid) (string, error) {
-	label, err := buildLabel(featureMap, labelList)
-	if err != nil {
-		return "", err
-	}
-
-	var output strings.Builder
-	output.Grow(len(label) + len(fidList)*24)
-	output.WriteString(label)
-
-	var numberBuffer [32]byte
-	for i := 0; i < len(fidList); i++ {
-		output.WriteByte(' ')
-		digits := strconv.AppendInt(numberBuffer[:0], int64(fidList[i].Slot), 10)
-		output.Write(digits)
-		output.WriteByte(':')
-		digits = strconv.AppendUint(numberBuffer[:0], fidList[i].Val, 10)
-		output.Write(digits)
-	}
-	makeAddToken(addTokenList, featureMap, &output)
-	return output.String(), nil
-}
-
-func buildLabel(featureMap map[string]string, labelList []string) (string, error) {
-	label := "0"
-	for i := 0; i < len(labelList); i++ {
-		labelName := labelList[i]
-
-		curLabel := getValue(featureMap, labelName)
-		if curLabel == "" {
-			err := errors.New("labelName not found")
-			return "", err
+		if seen[name] {
+			return nil, fmt.Errorf("%s contains duplicate field %q", key, name)
 		}
-		if curLabel != "0" {
-			label = fmt.Sprintf("%v", len(labelList) - i)
-			break
-		}
+		seen[name] = true
 	}
-	return label, nil
-}
-
-func makeAddToken(addTokenList []string, featureMap map[string]string, output *strings.Builder) {
-	if len(addTokenList) == 0 {
-		return
-	}
-	output.WriteString(" #")
-
-	for i := 0; i < len(addTokenList); i++ {
-		val := getValue(featureMap, addTokenList[i])
-		if val == "" {
-			fmt.Fprintf(os.Stderr, "token not found, token is %v\n", addTokenList[i])
-			continue
-		}
-		output.WriteString(val)
-		output.WriteByte('\t')
-	}
-}
-
-func getValue(configMap map[string]string, key string) string {
-	if value, ok := configMap[key]; ok {
-		return value
-	}
-	return ""
+	return names, nil
 }
 
 func loadParseConfig(parseConfPath string) (map[string]string, error) {
@@ -216,33 +147,3 @@ func loadParseConfig(parseConfPath string) (map[string]string, error) {
 	}
 	return parseConfMap, nil
 }
-
-func buildRequiredInput(featureNameList []string) []string {
-	featureSet := make(map[string]bool, len(featureNameList))
-	for _, name := range featureNameList {
-		featureSet[name] = true
-	}
-	required := make([]string, 0, 2)
-	for _, name := range []string{"traceid", "s_id"} {
-		if featureSet[name] {
-			required = append(required, name)
-		}
-	}
-	return required
-}
-
-func (off *Parser) ValidRequiredInput(featureMap map[string]string) bool {
-	for _, name := range off.requiredInput {
-		if strings.TrimSpace(getValue(featureMap, name)) == "" {
-			return false
-		}
-	}
-	return true
-}
-
-// func (off *offlineExtractor) OutFeaSize() {
-// 	var res int64
-// 	for _, featureBase := range off.Extractor.featureBaseList {
-// 		if featureBase.GetSlot
-// 	}
-// }

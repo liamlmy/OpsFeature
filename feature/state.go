@@ -2,34 +2,8 @@ package feature
 
 import "sort"
 
-// 本文件定义抽取过程中流转的三个数据结构体：
-//   Input —— 条件样本的只读输入
-//   State —— 条件样本的可变中间态（链式依赖 / 缓存），跨算子复用
-//   Fid   —— 条件抽取结果
-
-type Fid struct {
-	Slot int    // 输出槽位
-	Val  uint64 // 特征 id
-}
-
-type Input struct {
-	Global map[string]interface{} // 请求级公共特征
-	Score  map[string]interface{} // 当前候选的特征
-}
-
-func (in *Input) get(name string) (interface{}, bool) {
-	if in == nil {
-		return nil, false
-	}
-	if v, ok := in.Global[name]; ok {
-		return v, true
-	}
-	if v, ok := in.Score[name]; ok {
-		return v, true
-	}
-	return nil, false
-}
-
+// State holds intermediate values and caches for one sample.
+// Call Reset before reusing it for a different sample; do not share it concurrently.
 type State struct {
 	inner   map[string]interface{}
 	fids    map[string]*fidCache
@@ -140,72 +114,5 @@ func sortInt64s(a []int64) {
 			j--
 		}
 		a[j+1] = v
-	}
-}
-
-type fidCache struct {
-	byFloat  map[float64]uint64
-	byString map[string]uint64
-	byInt64  map[int64]uint64
-	byUint64 map[uint64]uint64
-	byBool   map[bool]uint64
-	byIface  map[interface{}]uint64
-}
-
-func (c *fidCache) get(v value) (uint64, bool) {
-	switch v.k {
-	case kindFloat64:
-		fid, ok := c.byFloat[v.f]
-		return fid, ok
-	case kindString:
-		fid, ok := c.byString[v.s]
-		return fid, ok
-	case kindInt64:
-		fid, ok := c.byInt64[int64(v.u)]
-		return fid, ok
-	case kindUint64:
-		fid, ok := c.byUint64[v.u]
-		return fid, ok
-	case kindBool:
-		fid, ok := c.byBool[v.u == 1]
-		return fid, ok
-	default:
-		fid, ok := c.byIface[v.iface]
-		return fid, ok
-	}
-}
-
-func (c *fidCache) put(v value, fid uint64) {
-	switch v.k {
-	case kindFloat64:
-		if c.byFloat == nil {
-			c.byFloat = make(map[float64]uint64)
-		}
-		c.byFloat[v.f] = fid
-	case kindString:
-		if c.byString == nil {
-			c.byString = make(map[string]uint64)
-		}
-		c.byString[v.s] = fid
-	case kindInt64:
-		if c.byInt64 == nil {
-			c.byInt64 = make(map[int64]uint64)
-		}
-		c.byInt64[int64(v.u)] = fid
-	case kindUint64:
-		if c.byUint64 == nil {
-			c.byUint64 = make(map[uint64]uint64)
-		}
-		c.byUint64[v.u] = fid
-	case kindBool:
-		if c.byBool == nil {
-			c.byBool = make(map[bool]uint64)
-		}
-		c.byBool[v.u == 1] = fid
-	default:
-		if c.byIface == nil {
-			c.byIface = make(map[interface{}]uint64)
-		}
-		c.byIface[v.iface] = fid
 	}
 }

@@ -218,7 +218,7 @@
 - **现状**：`sessionSource`/`vectorSource` 使用 `sync.Pool`，但解析函数每次创建新 slice，旧 backing array 基本没有得到复用。
 - **建议**：增加 `ParseArrayInto(dst[:0], ...)` 形式的函数，或移除收益不明显的 pool，避免保留内存却没有减少分配。
 - **验收**：benchmark 显示长序列场景的 allocs/op 和 B/op 明显下降，且大对象不会长期滞留。
-- **涉及文件**：`feature/source.go`、`utils/mathUtils.go`。
+- **涉及文件**：`feature/source.go`、`utils/array.go`。
 
 ### [ ] 优化交叉特征字符串构造
 
@@ -247,10 +247,11 @@
 - 明确 `Extractor` 是否可并发复用、`State` 必须每请求独占且每样本 Reset。
 - 考虑提供 `ExtractOne` 包装器，内部负责 State 生命周期，降低调用方误用概率。
 
-### [ ] 清理或隔离未使用的通用工具代码
+### [x] 按职责隔离通用工具代码
 
-- `utils/mathUtils.go` 包含大量与当前特征链路无关的地理、时间、哈希工具。
-- 先用 `rg` 和测试确认无调用，再删除、拆包或标记兼容用途，降低维护面。
+- 已将原 `utils/mathUtils.go` 拆成 `array.go`、`math.go`、`precision.go`、`geo.go`、`time.go` 和 `hash.go`。
+- 地理、时间及其他哈希工具保留兼容用途；公开函数签名和行为保持不变。
+- 已补数组解析兼容性测试，覆盖空值、坏元素、padding 和截断。
 
 ### [ ] 提供可运行的 examples 目录
 

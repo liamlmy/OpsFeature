@@ -29,10 +29,8 @@ func CombineSlotAndHash(slotID int, v interface{}) uint64 {
 	return CombineSlotWithHash(slotID, CityHash64Any(v))
 }
 
-// 下面这组 typed 函数是 CityHash64Any 各分支的**唯一实现**,CityHash64Any 只做类型
-// 分发。这样调用方可以直接调 typed 版本而无需把值装箱成 interface{}(装箱是一次堆
-// 分配,alloc_objects profile 里各算子调用 GetFid 时的装箱占全进程分配对象数的 8%),
-// 同时哈希结果与走 interface{} 完全同源,不可能漂移。
+// The typed helpers share their implementations with CityHash64Any.
+// Numeric values use little-endian bytes; floating-point values use their bit patterns.
 
 func CityHash64String(x string) uint64 { return Hash64([]byte(x)) }
 
