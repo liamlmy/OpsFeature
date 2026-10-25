@@ -109,17 +109,18 @@ func (s *vectorSource) release() {
 func getSessionField() *sessionFieldSource {
 	s := sessionFieldPool.Get().(*sessionFieldSource)
 	s.data = s.data[:0]
+	s.valid = s.valid[:0]
 	return s
 }
 
 func (s *sessionFieldSource) release() {
-	if cap(s.data) > maxPooledEntries {
+	if cap(s.data) > maxPooledEntries || cap(s.valid) > maxPooledEntries {
 		s.data = nil
+		s.valid = nil
 	} else {
-		for i := range s.data {
-			s.data[i] = nil
-		}
+		clear(s.data)
 		s.data = s.data[:0]
+		s.valid = s.valid[:0]
 	}
 	sessionFieldPool.Put(s)
 }

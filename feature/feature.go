@@ -22,9 +22,8 @@ const (
 )
 
 const (
-	coeffEpsilon = 1e-6
-	maxSlotID    = 32768
-	minFakeSlot  = 32768
+	maxSlotID   = 32768
+	minFakeSlot = 32768
 )
 
 type Operator interface {
@@ -48,6 +47,7 @@ type Base struct {
 	shareSlot   int
 	hashVersion int
 	coeff       float64
+	scale       *fidScale
 	isSeq       bool
 	slots       fakeSlotRange
 
@@ -131,6 +131,8 @@ func (b *Base) validate() error {
 }
 
 func (b *Base) parseHashArgs(hvIdx, coeffIdx int) error {
+	b.coeff = 1
+	b.scale = nil
 	if v, ok := b.arg(hvIdx); ok && v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -146,6 +148,15 @@ func (b *Base) parseHashArgs(hvIdx, coeffIdx int) error {
 				b.name, coeffIdx, v, err)
 		}
 		b.coeff = f
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("operator: feature %q coefficient must be finite", b.name)
+		}
+		if b.hashVersion == hashVersionRawValue || b.hashVersion == hashVersionSlotValue {
+			b.scale, err = newFIDScale(v)
+			if err != nil {
+				return fmt.Errorf("operator: feature %q: %w", b.name, err)
+			}
+		}
 	}
 	return nil
 }

@@ -84,6 +84,11 @@ func (s *sessionSource) Data() []uint64           { return s.data }
 func (s *vectorSource) Data() []float64           { return s.data }
 func (s *sessionFieldSource) Data() []interface{} { return s.data }
 
+// Valid reports whether the position came from an original, successfully parsed value.
+func (s *sessionFieldSource) Valid(index int) bool {
+	return index >= 0 && index < len(s.valid) && s.valid[index]
+}
+
 type EmitCtx = emitCtx
 
 func NewEmitCtx(st *State, out *[]Fid, addCol bool) *EmitCtx {

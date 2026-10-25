@@ -182,11 +182,14 @@ func (s *vectorSource) parse(b *Base, depend string, in *Input, st *State) error
 }
 
 type sessionFieldSource struct {
-	data []interface{}
+	data  []interface{}
+	valid []bool // distinguishes original values from missing/bad/padded positions
 }
 
 func (s *sessionFieldSource) parse(b *Base, depend string, in *Input, st *State) error {
 	raw := b.dependString(depend, in, st)
+	s.data = s.data[:0]
+	s.valid = s.valid[:0]
 
 	fieldIndex := b.argStr(5, "0")
 	isStr := b.argStr(6, "int") == "str"
@@ -229,32 +232,31 @@ func (s *sessionFieldSource) parse(b *Base, depend string, in *Input, st *State)
 			break
 		}
 	}
-	if seq == "" {
-		return nil
-	}
-
-	for len(seq) > 0 {
-		var elem string
-		elem, seq = nextField(seq, '_')
-		if isStr {
-			s.data = append(s.data, elem)
-		} else {
-			v, err := strconv.ParseUint(elem, 10, 64)
-			switch {
-			case err == nil:
-				s.data = append(s.data, v)
-			case padTo > 0:
-				s.data = append(s.data, padVal)
-			default:
-				continue
+	if seq != "" {
+		for elem := range strings.SplitSeq(seq, "_") {
+			v := padVal
+			valid := elem != ""
+			if isStr {
+				if valid {
+					v = elem
+				}
+			} else {
+				number, err := strconv.ParseUint(elem, 10, 64)
+				valid = err == nil
+				if valid {
+					v = number
+				}
+			}
+			s.data = append(s.data, v)
+			s.valid = append(s.valid, valid)
+			if padTo > 0 && len(s.data) >= padTo {
+				break
 			}
 		}
-		if padTo > 0 && len(s.data) == padTo {
-			break
-		}
 	}
-	for i := len(s.data); i < padTo; i++ {
+	for len(s.data) < padTo {
 		s.data = append(s.data, padVal)
+		s.valid = append(s.valid, false)
 	}
 	return nil
 }

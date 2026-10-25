@@ -2,6 +2,7 @@ package operator
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/liamlmy/OpsFeature/feature"
 )
@@ -59,7 +60,8 @@ func (s *Seq) Emit(in *feature.Input, st *feature.State, out *[]feature.Fid) err
 // SeqField 对应 class=Seq_field。
 type SeqField struct {
 	feature.Base
-	slots feature.FakeSlotRange
+	slots   feature.FakeSlotRange
+	padding float64 // Output-space default; never interpret missing values as timestamps.
 }
 
 func (s *SeqField) Init() error {
@@ -94,6 +96,12 @@ func (s *SeqField) Init() error {
 	if element == "int" {
 		_, err = s.ArgUint64(8)
 	}
+	if err != nil {
+		return err
+	}
+	if len(s.Depends()) == 2 {
+		s.padding, err = s.ArgFloat(8)
+	}
 	return err
 }
 
@@ -106,30 +114,41 @@ func (s *SeqField) Emit(in *feature.Input, st *feature.State, out *[]feature.Fid
 	ctx := feature.NewEmitCtx(st, out, s.AddCol())
 	defer s.Flush(ctx)
 
-	hasBase := len(s.Depends()) >= 2
+	hasBase := len(s.Depends()) == 2
 	var baseTs float64
-	if hasBase {
-		baseTs = s.DependFloat64(s.Depends()[1], in, st)
-	}
-
+	baseReady := false
 	data := src.Data()
 	n := clampSeqLen(&s.Base, len(data), s.slots.Num())
 	ctx.Reserve(n)
-
-	fakeSlot := s.slots.Start()
 	for i := 0; i < n; i++ {
+		slot := s.slots.Start() + i
 		raw := data[i]
 		if !hasBase {
-			s.EmitIface(raw, fakeSlot, ctx)
-			fakeSlot++
+			s.EmitIface(raw, slot, ctx)
+			continue
+		}
+		if !src.Valid(i) {
+			s.EmitFloat64(s.padding, slot, ctx)
 			continue
 		}
 		f, ok := feature.ToFloat64(raw)
-		if !ok {
+		if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
+			s.EmitFloat64(s.padding, slot, ctx)
 			continue
 		}
-		s.EmitFloat64((baseTs-f)/86400, fakeSlot, ctx)
-		fakeSlot++
+		if !baseReady {
+			base, exists := s.DependRaw(s.Depends()[1], in, st)
+			baseTs, ok = feature.ToFloat64(base)
+			if !exists || !ok || math.IsNaN(baseTs) || math.IsInf(baseTs, 0) {
+				return fmt.Errorf("operator: feature %q base timestamp must be finite numeric", s.Name())
+			}
+			baseReady = true
+		}
+		delta := (baseTs - f) / 86400
+		if math.IsNaN(delta) || math.IsInf(delta, 0) {
+			return fmt.Errorf("operator: feature %q timestamp difference overflow", s.Name())
+		}
+		s.EmitFloat64(delta, slot, ctx)
 	}
 	return nil
 }

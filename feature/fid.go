@@ -98,11 +98,7 @@ func (b *Base) emit(v value, outSlot int, ctx *emitCtx) {
 func (b *Base) computeFid(v value) (uint64, error) {
 	switch b.hashVersion {
 	case hashVersionRawValue, hashVersionSlotValue:
-		coeff := 1.0
-		if b.coeff > coeffEpsilon {
-			coeff = b.coeff
-		}
-		val, err := v.toUint64(coeff)
+		val, err := v.toUint64(b.scale)
 		if err != nil {
 			return 0, err
 		}

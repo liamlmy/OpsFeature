@@ -64,10 +64,10 @@ func ifaceValue(v interface{}) value {
 
 var (
 	errValueBelowZero      = errors.New("operator: value below 0")
+	errValueOutOfRange     = errors.New("operator: scaled value exceeds uint64 range")
+	errValueNotFinite      = errors.New("operator: value must be finite")
 	errUnsupportedDataType = errors.New("operator: unsupported data type")
 )
-
-const maxUint64AsFloat = float64(1<<64 - 1)
 
 func (v value) toString() (string, error) {
 	switch v.k {
@@ -92,31 +92,18 @@ func (v value) toString() (string, error) {
 	}
 }
 
-func (v value) toUint64(coeff float64) (uint64, error) {
+func (v value) toUint64(scale *fidScale) (uint64, error) {
 	switch v.k {
 	case kindInt64:
-		val := int64(v.u) * int64(coeff)
-		if val >= 0 {
-			return uint64(val), nil
-		}
-		return 0, errValueBelowZero
-	case kindUint64:
-		return v.u * uint64(coeff), nil
+		return scaleInt64(int64(v.u), scale)
+	case kindUint64, kindBool:
+		return scaleUint64(v.u, scale)
 	case kindFloat64:
-		val := v.f * coeff
-		if val >= 0 && val <= maxUint64AsFloat {
-			return uint64(val), nil
-		}
-		return 0, errValueBelowZero
-	case kindBool:
-		if v.u == 1 {
-			return uint64(coeff), nil
-		}
-		return 0, nil
+		return scaleFloat(v.f, 64, scale)
 	case kindString:
 		return 0, errUnsupportedDataType
 	default:
-		return convertToUint64(v.iface, coeff)
+		return convertToUint64(v.iface, scale)
 	}
 }
 
@@ -161,17 +148,32 @@ func (v value) hash() uint64 {
 	}
 }
 
-func convertToUint64(data interface{}, coeff float64) (uint64, error) {
-	switch v := data.(type) {
+func convertToUint64(data interface{}, scale *fidScale) (uint64, error) {
+	switch n := data.(type) {
+	case int:
+		return scaleInt64(int64(n), scale)
+	case int8:
+		return scaleInt64(int64(n), scale)
+	case int16:
+		return scaleInt64(int64(n), scale)
+	case int32:
+		return scaleInt64(int64(n), scale)
+	case int64:
+		return scaleInt64(n, scale)
+	case uint:
+		return scaleUint64(uint64(n), scale)
+	case uint8:
+		return scaleUint64(uint64(n), scale)
+	case uint16:
+		return scaleUint64(uint64(n), scale)
 	case uint32:
-		// 保持原有的 uint32 乘法语义（在 uint32 上做乘法，会回绕）
-		return uint64(v * uint32(coeff)), nil
+		return scaleUint64(uint64(n), scale)
+	case uint64:
+		return scaleUint64(n, scale)
 	case float32:
-		val := v * float32(coeff)
-		if val >= 0 {
-			return uint64(val), nil
-		}
-		return 0, errValueBelowZero
+		return scaleFloat(float64(n), 32, scale)
+	case float64:
+		return scaleFloat(n, 64, scale)
 	default:
 		return 0, errUnsupportedDataType
 	}

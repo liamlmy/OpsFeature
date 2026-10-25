@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -32,30 +33,28 @@ func ParseArrayInt(str, sep string, paddingSize int, paddingValue uint64) []uint
 	return res
 }
 
-// ParseArrayIntNew skips invalid elements unless padding is enabled.
-// For compatibility, empty input returns nil even when paddingSize is positive.
+// ParseArrayIntNew preserves every input position, replacing invalid elements
+// with paddingValue. Positive paddingSize pads empty/short input and truncates long input.
 func ParseArrayIntNew(str, sep string, paddingSize int, paddingValue uint64) []uint64 {
 	return ParseArrayIntNewInto(nil, str, sep, paddingSize, paddingValue)
 }
 
-// ParseArrayIntNewInto preserves ParseArrayIntNew semantics while reusing dst.
+// ParseArrayIntNewInto follows ParseArrayIntNew rules while reusing dst.
 func ParseArrayIntNewInto(dst []uint64, str, sep string, paddingSize int, paddingValue uint64) []uint64 {
 	dst = dst[:0]
-	if str == "" {
-		return dst
-	}
 	if paddingSize > cap(dst) {
 		dst = make([]uint64, 0, paddingSize)
 	}
-	for elem := range strings.SplitSeq(str, sep) {
-		v, err := strconv.ParseUint(elem, 10, 64)
-		if err == nil {
+	if str != "" {
+		for elem := range strings.SplitSeq(str, sep) {
+			v, err := strconv.ParseUint(elem, 10, 64)
+			if err != nil {
+				v = paddingValue
+			}
 			dst = append(dst, v)
-		} else if paddingSize > 0 {
-			dst = append(dst, paddingValue)
-		}
-		if paddingSize > 0 && len(dst) >= paddingSize {
-			break
+			if paddingSize > 0 && len(dst) >= paddingSize {
+				break
+			}
 		}
 	}
 	for len(dst) < paddingSize {
@@ -76,7 +75,7 @@ func ParseArray(str, sep string, paddingSize int, paddingValue float64) []float6
 	strList := strings.Split(str, sep)
 	for _, elem := range strList {
 		v, err := strconv.ParseFloat(elem, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 			res = append(res, paddingValue)
 		} else {
 			res = append(res, v)
@@ -91,13 +90,13 @@ func ParseArray(str, sep string, paddingSize int, paddingValue float64) []float6
 	return res
 }
 
-// ParseArrayNew skips invalid elements unless padding is enabled.
-// Unlike ParseArrayIntNew, empty input is padded to paddingSize.
+// ParseArrayNew preserves positions, replacing invalid or non-finite numbers
+// with paddingValue. Positive paddingSize pads empty/short input and truncates long input.
 func ParseArrayNew(str, sep string, paddingSize int, paddingValue float64) []float64 {
 	return ParseArrayNewInto(nil, str, sep, paddingSize, paddingValue)
 }
 
-// ParseArrayNewInto preserves ParseArrayNew semantics while reusing dst.
+// ParseArrayNewInto follows ParseArrayNew rules while reusing dst.
 func ParseArrayNewInto(dst []float64, str, sep string, paddingSize int, paddingValue float64) []float64 {
 	dst = dst[:0]
 	if paddingSize > cap(dst) {
@@ -106,11 +105,10 @@ func ParseArrayNewInto(dst []float64, str, sep string, paddingSize int, paddingV
 	if str != "" {
 		for elem := range strings.SplitSeq(str, sep) {
 			v, err := strconv.ParseFloat(elem, 64)
-			if err == nil {
-				dst = append(dst, v)
-			} else if paddingSize > 0 {
-				dst = append(dst, paddingValue)
+			if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+				v = paddingValue
 			}
+			dst = append(dst, v)
 			if paddingSize > 0 && len(dst) >= paddingSize {
 				break
 			}
